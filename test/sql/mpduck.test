@@ -9,3 +9,42 @@ require mpduck
 statement error
 SELECT * FROM read_mpfile();
 ----
+
+# Schema row maps types: T{n}=VARCHAR, S=SMALLINT, N=DOUBLE, I=INTEGER
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/schema.rpt'))
+ORDER BY column_name;
+----
+AGE	SMALLINT
+CODE	VARCHAR
+COUNT	INTEGER
+NAME	VARCHAR
+SCORE	DOUBLE
+
+# Schema row after a data row must raise an error
+statement error
+SELECT * FROM read_mpfile('test/data/schema_after_data.rpt');
+----
+mpfile schema row ('&') found after data row ('*')
+
+# Glob: schemas are merged across files, widening types where they differ.
+# glob_a: NAME=VARCHAR, AGE=SMALLINT, SCORE=DOUBLE,   CODE=VARCHAR
+# glob_b: NAME=VARCHAR, AGE=INTEGER,  SCORE=INTEGER,  CODE=VARCHAR
+# merged: NAME=VARCHAR, AGE=INTEGER,  SCORE=DOUBLE,   CODE=VARCHAR
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/glob_*.rpt'))
+ORDER BY column_name;
+----
+AGE	INTEGER
+CODE	VARCHAR
+NAME	VARCHAR
+SCORE	DOUBLE
+
+# Confirm the data round-trips correctly under the merged schema
+query IIIR rowsort
+SELECT NAME, AGE, CODE, SCORE FROM read_mpfile('test/data/glob_*.rpt');
+----
+Alice	30	ABC	98.5
+Bob	25	XYZ	72.0

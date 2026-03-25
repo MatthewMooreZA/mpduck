@@ -4,6 +4,23 @@
 
 namespace duckdb {
 
+//! Schema extracted from an mpfile '&' row.
+//! column_types contains DuckDB type-name strings aligned 1:1 with column_names.
+struct MPFileSchema {
+	bool found = false;
+	vector<string> column_names;
+	vector<string> column_types;
+};
+
+//! Parse the header ('!') and schema ('&') rows from raw mpfile content.
+//! Throws if a '&' row is found after the first '*' (data) row.
+MPFileSchema ParseMPFileSchema(const string &raw_content);
+
+//! Merge a collection of schemas into one, widening types where they differ.
+//! Numeric widening order: SMALLINT < INTEGER < DOUBLE. Any non-numeric mismatch
+//! falls back to VARCHAR. Columns present in only some files are included as-is.
+MPFileSchema MergeSchemas(const vector<MPFileSchema> &schemas);
+
 class MPFileHandle : public FileHandle {
 public:
 	MPFileHandle(FileSystem &fs, const string &path, FileOpenFlags flags, string content);
