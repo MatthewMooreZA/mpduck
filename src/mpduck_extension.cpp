@@ -14,21 +14,29 @@
 
 namespace duckdb {
 
-//! Redirect read_mpfile('path') to read_csv_auto('path').
-//! The registered MPFileSystem intercepts the file open and returns filtered content.
-static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableFunctionBindInput &input) {
-	auto path = input.inputs[0].GetValue<string>();
-
-	auto table_function = make_uniq<TableFunctionRef>();
+//! Build a read_csv_auto TableFunctionRef for the given path with union_by_name=true.
+static unique_ptr<TableFunctionRef> MakeReadCSVRef(const string &path) {
 	vector<unique_ptr<ParsedExpression>> children;
 	children.push_back(make_uniq<ConstantExpression>(Value(path)));
-	table_function->function = make_uniq<FunctionExpression>("read_csv_auto", std::move(children));
 
+	auto union_by_name = make_uniq<ConstantExpression>(Value::BOOLEAN(true));
+	union_by_name->SetAlias("union_by_name");
+	children.push_back(std::move(union_by_name));
+
+	auto table_function = make_uniq<TableFunctionRef>();
+	table_function->function = make_uniq<FunctionExpression>("read_csv_auto", std::move(children));
+	return table_function;
+}
+
+//! Redirect read_mpfile('path') to read_csv_auto('path', union_by_name=true).
+//! The registered MPFileSystem intercepts each file open and returns filtered content.
+static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableFunctionBindInput &input) {
+	auto path = input.inputs[0].GetValue<string>();
+	auto table_function = MakeReadCSVRef(path);
 	auto &fs = FileSystem::GetFileSystem(context);
 	if (!FileSystem::HasGlob(path)) {
 		table_function->alias = fs.ExtractBaseName(path);
 	}
-
 	return std::move(table_function);
 }
 
@@ -39,15 +47,9 @@ static unique_ptr<TableRef> ReadMPFileReplacement(ClientContext &context, Replac
 	if (!ReplacementScan::CanReplace(table_name, {"rpt", "prn"})) {
 		return nullptr;
 	}
-
-	auto table_function = make_uniq<TableFunctionRef>();
-	vector<unique_ptr<ParsedExpression>> children;
-	children.push_back(make_uniq<ConstantExpression>(Value(table_name)));
-	table_function->function = make_uniq<FunctionExpression>("read_csv_auto", std::move(children));
-
+	auto table_function = MakeReadCSVRef(table_name);
 	auto &fs = FileSystem::GetFileSystem(context);
 	table_function->alias = fs.ExtractBaseName(table_name);
-
 	return std::move(table_function);
 }
 
