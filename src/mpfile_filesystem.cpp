@@ -238,6 +238,12 @@ idx_t MPFileSystem::SeekPosition(FileHandle &handle) {
 }
 
 vector<OpenFileInfo> MPFileSystem::Glob(const string &path, FileOpener *opener) {
+	// If the path contains no glob characters, treat it as a single file path
+	// and return it directly without expanding. This avoids the local filesystem
+	// glob failing on paths that don't need expansion.
+	if (path.find_first_of("*?[") == string::npos) {
+		return {OpenFileInfo(path)};
+	}
 	auto local_fs = FileSystem::CreateLocal();
 	return local_fs->Glob(path, opener);
 }
