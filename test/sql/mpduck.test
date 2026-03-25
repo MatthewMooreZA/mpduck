@@ -1,0 +1,11 @@
+# name: test/sql/mpduck.test
+# description: test mpduck extension
+# group: [sql]
+
+# Require statement will ensure this test is run with this extension loaded
+require mpduck
+
+# Confirm read_mpfile function is registered
+statement error
+SELECT * FROM read_mpfile();
+----
