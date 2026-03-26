@@ -81,7 +81,6 @@ static string MapMPType(const string &mp_type, size_t col_idx) {
 
 MPFileSchema ParseMPFileSchema(const string &raw) {
 	MPFileSchema schema;
-	bool found_data = false;
 
 	size_t pos = 0;
 	while (pos < raw.size()) {
@@ -107,14 +106,10 @@ MPFileSchema ParseMPFileSchema(const string &raw) {
 			}
 
 			if (indicator == '*') {
-				found_data = true;
+				break;
 			} else if (indicator == '!' && has_comma) {
 				schema.column_names = SplitFields(raw, comma + 1, line_end_pos);
 			} else if (first_field_upper == "VARIABLE_TYPES") {
-				if (found_data) {
-					throw IOException("mpfile schema row ('VARIABLE_TYPES') found after data row ('*'); schema must "
-					                  "precede all data rows");
-				}
 				if (has_comma) {
 					auto fields = SplitFields(raw, comma + 1, line_end_pos);
 					// fields[0] is the type for the indicator column itself — skip it to align with column names
@@ -122,6 +117,7 @@ MPFileSchema ParseMPFileSchema(const string &raw) {
 						schema.column_types.push_back(MapMPType(fields[i], i - 1));
 					}
 					schema.found = true;
+					break;
 				}
 			}
 		}

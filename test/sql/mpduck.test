@@ -22,12 +22,6 @@ COUNT	INTEGER
 NAME	VARCHAR
 SCORE	DOUBLE
 
-# Schema row after a data row must raise an error
-statement error
-SELECT * FROM read_mpfile('test/data/schema_after_data.rpt');
-----
-mpfile schema row ('VARIABLE_TYPES') found after data row ('*')
-
 # Glob: schemas are merged across files, widening types where they differ.
 # glob_a: NAME=VARCHAR, AGE=SMALLINT, SCORE=DOUBLE,   CODE=VARCHAR
 # glob_b: NAME=VARCHAR, AGE=INTEGER,  SCORE=INTEGER,  CODE=VARCHAR

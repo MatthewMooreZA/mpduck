@@ -13,7 +13,6 @@ struct MPFileSchema {
 };
 
 //! Parse the header ('!') and schema ('&') rows from raw mpfile content.
-//! Throws if a '&' row is found after the first '*' (data) row.
 MPFileSchema ParseMPFileSchema(const string &raw_content);
 
 //! Merge a collection of schemas into one, widening types where they differ.
