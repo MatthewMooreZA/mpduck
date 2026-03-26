@@ -53,11 +53,11 @@ static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableF
 		vector<MPFileSchema> schemas;
 		schemas.reserve(files.size());
 		for (const auto &info : files) {
-			schemas.push_back(ParseMPFileSchema(info.path));
+			schemas.push_back(ParseMPFileSchema(info.path, fs));
 		}
 		schema = MergeSchemas(schemas);
 	} else {
-		schema = ParseMPFileSchema(path);
+		schema = ParseMPFileSchema(path, fs);
 	}
 
 	auto table_function = MakeReadCSVRef(path, schema);
@@ -75,9 +75,9 @@ static unique_ptr<TableRef> ReadMPFileReplacement(ClientContext &context, Replac
 		return nullptr;
 	}
 
-	auto schema = ParseMPFileSchema(table_name);
-	auto table_function = MakeReadCSVRef(table_name, schema);
 	auto &fs = FileSystem::GetFileSystem(context);
+	auto schema = ParseMPFileSchema(table_name, fs);
+	auto table_function = MakeReadCSVRef(table_name, schema);
 	table_function->alias = fs.ExtractBaseName(table_name);
 	return std::move(table_function);
 }

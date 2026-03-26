@@ -1,12 +1,20 @@
 #include "mpfile_filesystem.hpp"
 
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/main/database.hpp"
 
 #include <cstring>
 #include <unordered_map>
 
 namespace duckdb {
+
+// Guard that prevents MPFileSystem from intercepting its own internal raw-file opens.
+// Set to true while MPFileSystem (or ParseMPFileSchema) is opening the underlying file
+// so that CanHandleFile returns false and the VFS routes to the correct sub-system
+// (e.g. httpfs for https://) instead of recursing back into MPFileSystem.
+static thread_local bool t_mpfs_opening = false;
 
 MPFileHandle::MPFileHandle(FileSystem &fs, const string &path, FileOpenFlags flags, string content_p)
     : FileHandle(fs, path, flags), content(std::move(content_p)), position(0) {
@@ -41,20 +49,25 @@ static string MapMPType(const string &mp_type, size_t col_idx) {
 	throw IOException("Unknown mpfile type specifier '%s' at column %llu", mp_type, (unsigned long long)col_idx);
 }
 
-MPFileSchema ParseMPFileSchema(const string &path) {
+MPFileSchema ParseMPFileSchema(const string &path, FileSystem &fs) {
 	MPFileSchema schema;
-	auto local_fs = FileSystem::CreateLocal();
-	if (!local_fs->FileExists(path)) {
+
+	t_mpfs_opening = true;
+	unique_ptr<FileHandle> handle;
+	try {
+		handle = fs.OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
+		t_mpfs_opening = false;
+	} catch (...) {
+		t_mpfs_opening = false;
 		return schema;
 	}
-	auto handle = local_fs->OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
 
 	const idx_t CHUNK_SIZE = 65536;
 	string buf(CHUNK_SIZE, '\0');
 	string pending;
 
 	while (true) {
-		int64_t n = local_fs->Read(*handle, &buf[0], CHUNK_SIZE);
+		int64_t n = handle->file_system.Read(*handle, &buf[0], CHUNK_SIZE);
 		if (n <= 0) {
 			break;
 		}
@@ -116,8 +129,9 @@ MPFileSchema ParseMPFileSchema(const string &path) {
 						schema.found = true;
 					}
 				} else {
-					// Unrecognised line — footer begins here
-					done = true;
+					// Unrecognised line — pre-data metadata (e.g. "Output_Format", "NUMLINES").
+					// Schema parsing always stops at the first '*' row so it never reaches
+					// the real footer; skip these lines rather than stopping early.
 				}
 			}
 
@@ -208,7 +222,16 @@ MPFileSchema MergeSchemas(const vector<MPFileSchema> &schemas) {
 	return result;
 }
 
+bool MPFileSystem::IsManuallySet() {
+	// Return true (absolute priority) except during the internal raw-file open
+	// where we need other sub-systems (httpfs, local FS) to handle I/O.
+	return !t_mpfs_opening;
+}
+
 bool MPFileSystem::CanHandleFile(const string &path) {
+	if (t_mpfs_opening) {
+		return false;
+	}
 	auto lower = StringUtil::Lower(path);
 	return StringUtil::EndsWith(lower, ".rpt") || StringUtil::EndsWith(lower, ".prn");
 }
@@ -216,12 +239,24 @@ bool MPFileSystem::CanHandleFile(const string &path) {
 //! Process one complete line for CSV output. Strips the indicator field and appends
 //! the remainder to filtered for '!' and '*' rows. Returns false when the line marks
 //! the start of a footer and streaming should stop.
-static bool ProcessFilterLine(const string &line, string &filtered) {
+//! seen_data tracks whether any '*' row has been emitted. Unrecognised lines are only
+//! treated as the footer start once at least one data row has been seen; before that
+//! they are pre-data metadata (e.g. "Output_Format", "NUMLINES") and are silently skipped.
+static bool ProcessFilterLine(const string &line, string &filtered, bool &seen_data) {
 	if (line.empty()) {
 		return true;
 	}
 	char indicator = line[0];
-	if (indicator == '!' || indicator == '*') {
+	if (indicator == '*') {
+		seen_data = true;
+		size_t comma = line.find(',');
+		if (comma != string::npos) {
+			filtered.append(line.data() + comma + 1, line.size() - comma - 1);
+			filtered += '\n';
+		}
+		return true;
+	}
+	if (indicator == '!') {
 		size_t comma = line.find(',');
 		if (comma != string::npos) {
 			filtered.append(line.data() + comma + 1, line.size() - comma - 1);
@@ -232,27 +267,34 @@ static bool ProcessFilterLine(const string &line, string &filtered) {
 	if (indicator == '&') {
 		return true; // always skip
 	}
-	// Check for VARIABLE_TYPES (case-insensitive) — skip it; anything else is footer
+	// Check for VARIABLE_TYPES (case-insensitive) — skip it
 	size_t comma = line.find(',');
 	size_t field_end = (comma != string::npos) ? comma : line.size();
 	string first_field(line, 0, field_end);
 	for (auto &c : first_field) {
 		c = (char)toupper((unsigned char)c);
 	}
-	return first_field == "VARIABLE_TYPES";
+	if (first_field == "VARIABLE_TYPES") {
+		return true;
+	}
+	// Unrecognised line: footer only if we have already emitted data rows.
+	// Before the first '*' row these are pre-data metadata lines — skip them.
+	return !seen_data;
 }
 
 //! Stream an mpfile, returning a filtered string containing only the content of
-//! '!' and '*' rows with the indicator field stripped. Stops at the first line
-//! whose indicator is not one of '!', '*', '&', or 'VARIABLE_TYPES'.
-static string FilterMPFileContent(FileHandle &raw_handle, FileSystem &local_fs) {
+//! '!' and '*' rows with the indicator field stripped. Stops at the first
+//! unrecognised line that follows at least one '*' data row (i.e. the footer).
+//! Unrecognised lines before any '*' row are pre-data metadata and are skipped.
+static string FilterMPFileContent(FileHandle &raw_handle) {
 	const idx_t CHUNK_SIZE = 65536;
 	string buf(CHUNK_SIZE, '\0');
 	string pending;
 	string filtered;
+	bool seen_data = false;
 
 	while (true) {
-		int64_t n = local_fs.Read(raw_handle, &buf[0], CHUNK_SIZE);
+		int64_t n = raw_handle.file_system.Read(raw_handle, &buf[0], CHUNK_SIZE);
 		if (n <= 0) {
 			break;
 		}
@@ -280,7 +322,7 @@ static string FilterMPFileContent(FileHandle &raw_handle, FileSystem &local_fs) 
 				line.pop_back();
 			}
 
-			if (!ProcessFilterLine(line, filtered)) {
+			if (!ProcessFilterLine(line, filtered, seen_data)) {
 				done = true;
 				break;
 			}
@@ -296,7 +338,7 @@ static string FilterMPFileContent(FileHandle &raw_handle, FileSystem &local_fs) 
 		if (pending.back() == '\r') {
 			pending.pop_back();
 		}
-		ProcessFilterLine(pending, filtered);
+		ProcessFilterLine(pending, filtered, seen_data);
 	}
 
 	return filtered;
@@ -304,9 +346,33 @@ static string FilterMPFileContent(FileHandle &raw_handle, FileSystem &local_fs) 
 
 unique_ptr<FileHandle> MPFileSystem::OpenFile(const string &path, FileOpenFlags flags,
                                               optional_ptr<FileOpener> opener) {
-	auto local_fs = FileSystem::CreateLocal();
-	auto raw_handle = local_fs->OpenFile(path, FileOpenFlags::FILE_FLAGS_READ, opener);
-	auto filtered = FilterMPFileContent(*raw_handle, *local_fs);
+	auto db = FileOpener::TryGetDatabase(opener);
+	unique_ptr<FileSystem> owned_local;
+	FileSystem *raw_fs;
+	if (db) {
+		raw_fs = &db->GetFileSystem();
+	} else {
+		owned_local = FileSystem::CreateLocal();
+		raw_fs = owned_local.get();
+	}
+
+	t_mpfs_opening = true;
+	unique_ptr<FileHandle> raw_handle;
+	try {
+		// When raw_fs is the database's OpenerFileSystem the opener is injected
+		// automatically, so we must not pass it explicitly.
+		if (db) {
+			raw_handle = raw_fs->OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
+		} else {
+			raw_handle = raw_fs->OpenFile(path, FileOpenFlags::FILE_FLAGS_READ, opener);
+		}
+		t_mpfs_opening = false;
+	} catch (...) {
+		t_mpfs_opening = false;
+		throw;
+	}
+
+	auto filtered = FilterMPFileContent(*raw_handle);
 	return make_uniq<MPFileHandle>(*this, path, flags, std::move(filtered));
 }
 

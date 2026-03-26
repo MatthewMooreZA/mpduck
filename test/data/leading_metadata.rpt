@@ -1,0 +1,8 @@
+Output_Format, MPF_FORMAT
+NUMLINES,      3
+VARIABLE_TYPES,T1,T20,T20,T20,N,N,T1,I
+!,NAME,SPECIES,PERIOD,LENGTH_M,WEIGHT_KG,HERBIVORE,DISCOVERED
+&,NAME,SPECIES,PERIOD,LENGTH_M,WEIGHT_KG,HERBIVORE,DISCOVERED
+*,T_Rex,Tyrannosaurus rex,Cretaceous,12.3,8000,N,1902
+*,Brachiosaurus,Brachiosaurus altithorax,Jurassic,26.0,56000,Y,1900
+*,Velociraptor,Velociraptor mongoliensis,Cretaceous,1.8,15,N,1924

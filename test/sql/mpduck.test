@@ -57,6 +57,15 @@ SELECT NAME, AGE FROM read_mpfile('test/data/footer.rpt');
 Alice	30
 Bob	25
 
+# Files with pre-data metadata lines (Output_Format, NUMLINES) are parsed correctly.
+# These lines appear before any '!' or '*' row and must be skipped, not treated as footer.
+query TRI rowsort
+SELECT NAME, LENGTH_M, DISCOVERED FROM read_mpfile('test/data/leading_metadata.rpt');
+----
+Brachiosaurus	26.0	1900
+T_Rex	12.3	1902
+Velociraptor	1.8	1924
+
 # Confirm the data round-trips correctly under the merged schema
 query IIIR rowsort
 SELECT NAME, AGE, CODE, SCORE FROM read_mpfile('test/data/glob_*.rpt');

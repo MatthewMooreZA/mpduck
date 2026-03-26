@@ -14,7 +14,7 @@ struct MPFileSchema {
 
 //! Parse the header ('!') and schema ('VARIABLE_TYPES') rows from an mpfile.
 //! Reads only until the first data ('*') row, 'VARIABLE_TYPES' row, or unrecognised line.
-MPFileSchema ParseMPFileSchema(const string &path);
+MPFileSchema ParseMPFileSchema(const string &path, FileSystem &fs);
 
 //! Merge a collection of schemas into one, widening types where they differ.
 //! Numeric widening order: SMALLINT < INTEGER < DOUBLE. Any non-numeric mismatch
@@ -56,6 +56,10 @@ public:
 	bool OnDiskFile(FileHandle &handle) override {
 		return false;
 	}
+
+	// Give MPFileSystem absolute priority for .rpt/.prn files so it always wins
+	// over other sub-systems (e.g. httpfs) regardless of extension load order.
+	bool IsManuallySet() override;
 
 	vector<OpenFileInfo> Glob(const string &path, FileOpener *opener = nullptr) override;
 	bool FileExists(const string &filename, optional_ptr<FileOpener> opener = nullptr) override;
