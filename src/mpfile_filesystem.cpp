@@ -12,44 +12,6 @@ MPFileHandle::MPFileHandle(FileSystem &fs, const string &path, FileOpenFlags fla
     : FileHandle(fs, path, flags), content(std::move(content_p)), position(0) {
 }
 
-//! Read raw file content and return a filtered version containing only the
-//! data from header rows ('!') and data rows ('*'), with the first-column
-//! indicator field stripped. Schema rows ('&') and any other rows are dropped.
-static string FilterMPFileContent(const string &raw) {
-	string filtered;
-	filtered.reserve(raw.size());
-
-	size_t pos = 0;
-	while (pos < raw.size()) {
-		size_t line_end = raw.find('\n', pos);
-		size_t next_pos = (line_end != string::npos) ? line_end + 1 : raw.size();
-		size_t line_len = (line_end != string::npos) ? line_end - pos : raw.size() - pos;
-
-		// Strip Windows carriage return
-		if (line_len > 0 && raw[pos + line_len - 1] == '\r') {
-			line_len--;
-		}
-
-		if (line_len > 0) {
-			char indicator = raw[pos];
-			if (indicator == '!' || indicator == '*') {
-				size_t comma_pos = raw.find(',', pos);
-				if (comma_pos != string::npos && comma_pos < pos + line_len) {
-					size_t field_start = comma_pos + 1;
-					size_t field_len = (pos + line_len) - field_start;
-					filtered.append(raw.data() + field_start, field_len);
-					filtered += '\n';
-				}
-			}
-			// Drop '&' rows and any unrecognised rows
-		}
-
-		pos = next_pos;
-	}
-
-	return filtered;
-}
-
 static vector<string> SplitFields(const string &raw, size_t start, size_t end) {
 	vector<string> fields;
 	size_t field_start = start;
@@ -79,50 +41,110 @@ static string MapMPType(const string &mp_type, size_t col_idx) {
 	throw IOException("Unknown mpfile type specifier '%s' at column %llu", mp_type, (unsigned long long)col_idx);
 }
 
-MPFileSchema ParseMPFileSchema(const string &raw) {
+MPFileSchema ParseMPFileSchema(const string &path) {
 	MPFileSchema schema;
+	auto local_fs = FileSystem::CreateLocal();
+	if (!local_fs->FileExists(path)) {
+		return schema;
+	}
+	auto handle = local_fs->OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
 
-	size_t pos = 0;
-	while (pos < raw.size()) {
-		size_t line_end = raw.find('\n', pos);
-		size_t next_pos = (line_end != string::npos) ? line_end + 1 : raw.size();
-		size_t line_len = (line_end != string::npos) ? line_end - pos : raw.size() - pos;
+	const idx_t CHUNK_SIZE = 65536;
+	string buf(CHUNK_SIZE, '\0');
+	string pending;
 
-		if (line_len > 0 && raw[pos + line_len - 1] == '\r') {
-			line_len--;
+	while (true) {
+		int64_t n = local_fs->Read(*handle, &buf[0], CHUNK_SIZE);
+		if (n <= 0) {
+			break;
 		}
 
-		if (line_len > 0) {
-			char indicator = raw[pos];
-			size_t line_end_pos = pos + line_len;
-			size_t comma = raw.find(',', pos);
-			bool has_comma = (comma != string::npos && comma < line_end_pos);
+		size_t chunk_pos = 0;
+		bool done = false;
 
-			// Extract first field and uppercase it for case-insensitive indicator checks
-			size_t field_end = has_comma ? comma : line_end_pos;
-			string first_field_upper(raw, pos, field_end - pos);
-			for (auto &c : first_field_upper) {
-				c = (char)toupper((unsigned char)c);
+		while (chunk_pos < static_cast<size_t>(n)) {
+			// Find the next newline within the current chunk
+			size_t nl = chunk_pos;
+			while (nl < static_cast<size_t>(n) && buf[nl] != '\n') {
+				nl++;
 			}
+
+			if (nl == static_cast<size_t>(n)) {
+				// No newline — carry the remainder forward into pending
+				pending.append(buf.data() + chunk_pos, n - chunk_pos);
+				chunk_pos = n;
+				continue;
+			}
+
+			// Complete line: pending prefix + chunk[chunk_pos..nl)
+			string line = pending + string(buf.data() + chunk_pos, nl - chunk_pos);
+			pending.clear();
+			chunk_pos = nl + 1;
+
+			if (!line.empty() && line.back() == '\r') {
+				line.pop_back();
+			}
+			if (line.empty()) {
+				continue;
+			}
+
+			char indicator = line[0];
+			size_t comma = line.find(',');
+			bool has_comma = (comma != string::npos);
 
 			if (indicator == '*') {
-				break;
+				// First data row — nothing more to learn
+				done = true;
 			} else if (indicator == '!' && has_comma) {
-				schema.column_names = SplitFields(raw, comma + 1, line_end_pos);
-			} else if (first_field_upper == "VARIABLE_TYPES") {
-				if (has_comma) {
-					auto fields = SplitFields(raw, comma + 1, line_end_pos);
-					// fields[0] is the type for the indicator column itself — skip it to align with column names
-					for (size_t i = 1; i < fields.size(); i++) {
-						schema.column_types.push_back(MapMPType(fields[i], i - 1));
-					}
-					schema.found = true;
-					break;
+				schema.column_names = SplitFields(line, comma + 1, line.size());
+			} else if (indicator == '&') {
+				// Always skip '&' rows
+			} else {
+				// Check for VARIABLE_TYPES (case-insensitive)
+				size_t field_end = has_comma ? comma : line.size();
+				string first_field(line, 0, field_end);
+				for (auto &c : first_field) {
+					c = (char)toupper((unsigned char)c);
 				}
+				if (first_field == "VARIABLE_TYPES") {
+					if (has_comma) {
+						auto fields = SplitFields(line, comma + 1, line.size());
+						// fields[0] is the type for the indicator column itself — skip it to align with column names
+						for (size_t i = 1; i < fields.size(); i++) {
+							schema.column_types.push_back(MapMPType(fields[i], i - 1));
+						}
+						schema.found = true;
+					}
+				} else {
+					// Unrecognised line — footer begins here
+					done = true;
+				}
+			}
+
+			if (done) {
+				break;
 			}
 		}
 
-		pos = next_pos;
+		if (done) {
+			break;
+		}
+	}
+
+	// Handle a final partial line if the file does not end with '\n'
+	if (!pending.empty()) {
+		if (pending.back() == '\r') {
+			pending.pop_back();
+		}
+		if (!pending.empty()) {
+			char indicator = pending[0];
+			size_t comma = pending.find(',');
+			bool has_comma = (comma != string::npos);
+			if (indicator == '!' && has_comma) {
+				schema.column_names = SplitFields(pending, comma + 1, pending.size());
+			}
+			// VARIABLE_TYPES or footer at EOF: leave schema as-is
+		}
 	}
 
 	return schema;
@@ -196,13 +218,92 @@ unique_ptr<FileHandle> MPFileSystem::OpenFile(const string &path, FileOpenFlags 
 	auto local_fs = FileSystem::CreateLocal();
 	auto raw_handle = local_fs->OpenFile(path, FileOpenFlags::FILE_FLAGS_READ, opener);
 
-	auto file_size = local_fs->GetFileSize(*raw_handle);
-	string raw_content(file_size, '\0');
-	if (file_size > 0) {
-		local_fs->Read(*raw_handle, &raw_content[0], file_size, 0);
+	const idx_t CHUNK_SIZE = 65536;
+	string buf(CHUNK_SIZE, '\0');
+	string pending;
+	string filtered;
+
+	while (true) {
+		int64_t n = local_fs->Read(*raw_handle, &buf[0], CHUNK_SIZE);
+		if (n <= 0) {
+			break;
+		}
+
+		size_t chunk_pos = 0;
+		bool done = false;
+
+		while (chunk_pos < static_cast<size_t>(n)) {
+			size_t nl = chunk_pos;
+			while (nl < static_cast<size_t>(n) && buf[nl] != '\n') {
+				nl++;
+			}
+
+			if (nl == static_cast<size_t>(n)) {
+				pending.append(buf.data() + chunk_pos, n - chunk_pos);
+				chunk_pos = n;
+				continue;
+			}
+
+			string line = pending + string(buf.data() + chunk_pos, nl - chunk_pos);
+			pending.clear();
+			chunk_pos = nl + 1;
+
+			if (!line.empty() && line.back() == '\r') {
+				line.pop_back();
+			}
+			if (line.empty()) {
+				continue;
+			}
+
+			char indicator = line[0];
+			if (indicator == '!' || indicator == '*') {
+				size_t comma = line.find(',');
+				if (comma != string::npos) {
+					filtered.append(line.data() + comma + 1, line.size() - comma - 1);
+					filtered += '\n';
+				}
+			} else if (indicator == '&') {
+				// Always skip '&' rows
+			} else {
+				// Check for VARIABLE_TYPES (case-insensitive) — skip it; anything else is footer
+				size_t comma = line.find(',');
+				size_t field_end = (comma != string::npos) ? comma : line.size();
+				string first_field(line, 0, field_end);
+				for (auto &c : first_field) {
+					c = (char)toupper((unsigned char)c);
+				}
+				if (first_field != "VARIABLE_TYPES") {
+					done = true;
+				}
+			}
+
+			if (done) {
+				break;
+			}
+		}
+
+		if (done) {
+			break;
+		}
 	}
 
-	auto filtered = FilterMPFileContent(raw_content);
+	// Handle a final partial line if the file does not end with '\n'
+	if (!pending.empty()) {
+		if (pending.back() == '\r') {
+			pending.pop_back();
+		}
+		if (!pending.empty()) {
+			char indicator = pending[0];
+			if (indicator == '!' || indicator == '*') {
+				size_t comma = pending.find(',');
+				if (comma != string::npos) {
+					filtered.append(pending.data() + comma + 1, pending.size() - comma - 1);
+					filtered += '\n';
+				}
+			}
+		}
+	}
+
 	return make_uniq<MPFileHandle>(*this, path, flags, std::move(filtered));
 }
 

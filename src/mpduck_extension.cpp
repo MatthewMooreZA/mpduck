@@ -14,21 +14,6 @@
 
 namespace duckdb {
 
-//! Read raw bytes from a local file. Returns empty string if file does not exist.
-static string ReadRawFileContent(const string &path) {
-	auto local_fs = FileSystem::CreateLocal();
-	if (!local_fs->FileExists(path)) {
-		return "";
-	}
-	auto handle = local_fs->OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
-	auto file_size = local_fs->GetFileSize(*handle);
-	string content(file_size, '\0');
-	if (file_size > 0) {
-		local_fs->Read(*handle, &content[0], file_size, 0);
-	}
-	return content;
-}
-
 //! Build a read_csv_auto TableFunctionRef for the given path.
 //! When a schema is provided its column types are forwarded via the dtypes parameter.
 static unique_ptr<TableFunctionRef> MakeReadCSVRef(const string &path, const MPFileSchema &schema) {
@@ -68,11 +53,11 @@ static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableF
 		vector<MPFileSchema> schemas;
 		schemas.reserve(files.size());
 		for (const auto &info : files) {
-			schemas.push_back(ParseMPFileSchema(ReadRawFileContent(info.path)));
+			schemas.push_back(ParseMPFileSchema(info.path));
 		}
 		schema = MergeSchemas(schemas);
 	} else {
-		schema = ParseMPFileSchema(ReadRawFileContent(path));
+		schema = ParseMPFileSchema(path);
 	}
 
 	auto table_function = MakeReadCSVRef(path, schema);
@@ -90,7 +75,7 @@ static unique_ptr<TableRef> ReadMPFileReplacement(ClientContext &context, Replac
 		return nullptr;
 	}
 
-	auto schema = ParseMPFileSchema(ReadRawFileContent(table_name));
+	auto schema = ParseMPFileSchema(table_name);
 	auto table_function = MakeReadCSVRef(table_name, schema);
 	auto &fs = FileSystem::GetFileSystem(context);
 	table_function->alias = fs.ExtractBaseName(table_name);

@@ -4,7 +4,7 @@
 
 namespace duckdb {
 
-//! Schema extracted from an mpfile '&' row.
+//! Schema extracted from an mpfile 'VARIABLE_TYPES' row.
 //! column_types contains DuckDB type-name strings aligned 1:1 with column_names.
 struct MPFileSchema {
 	bool found = false;
@@ -12,8 +12,9 @@ struct MPFileSchema {
 	vector<string> column_types;
 };
 
-//! Parse the header ('!') and schema ('&') rows from raw mpfile content.
-MPFileSchema ParseMPFileSchema(const string &raw_content);
+//! Parse the header ('!') and schema ('VARIABLE_TYPES') rows from an mpfile.
+//! Reads only until the first data ('*') row, 'VARIABLE_TYPES' row, or unrecognised line.
+MPFileSchema ParseMPFileSchema(const string &path);
 
 //! Merge a collection of schemas into one, widening types where they differ.
 //! Numeric widening order: SMALLINT < INTEGER < DOUBLE. Any non-numeric mismatch
