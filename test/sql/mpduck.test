@@ -50,6 +50,13 @@ SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/header_variation.rpt');
 Alice	30	98.5
 Bob	25	72.0
 
+# Footer content after the last data row is silently ignored — no error, no extra rows
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('test/data/footer.rpt');
+----
+Alice	30
+Bob	25
+
 # Confirm the data round-trips correctly under the merged schema
 query IIIR rowsort
 SELECT NAME, AGE, CODE, SCORE FROM read_mpfile('test/data/glob_*.rpt');

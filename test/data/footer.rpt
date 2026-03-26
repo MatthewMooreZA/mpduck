@@ -1,0 +1,9 @@
+VARIABLE_TYPES,T1,T20,S
+!,NAME,AGE
+*,Alice,30
+*,Bob,25
+This is a footer line
+More gibberish, with, commas, in, it
+!,NAME,AGE
+*,Carol,40
+VARIABLE_TYPES,T1,T20,I
