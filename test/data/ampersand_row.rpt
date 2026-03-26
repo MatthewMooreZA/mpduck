@@ -1,3 +1,5 @@
 !,NAME,AGE
-*,Alice,30
+&,NAME,AGE
 VARIABLE_TYPES,T1,T20,S
+*,Alice,30
+*,Bob,25

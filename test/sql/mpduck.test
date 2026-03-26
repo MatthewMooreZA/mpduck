@@ -26,7 +26,7 @@ SCORE	DOUBLE
 statement error
 SELECT * FROM read_mpfile('test/data/schema_after_data.rpt');
 ----
-mpfile schema row ('&') found after data row ('*')
+mpfile schema row ('VARIABLE_TYPES') found after data row ('*')
 
 # Glob: schemas are merged across files, widening types where they differ.
 # glob_a: NAME=VARCHAR, AGE=SMALLINT, SCORE=DOUBLE,   CODE=VARCHAR
@@ -41,6 +41,13 @@ AGE	INTEGER
 CODE	VARCHAR
 NAME	VARCHAR
 SCORE	DOUBLE
+
+# Rows starting with '&' are ignored (not treated as schema rows)
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('test/data/ampersand_row.rpt');
+----
+Alice	30
+Bob	25
 
 # Header row indicator with trailing digit (!1) is treated the same as (!)
 query IIR rowsort

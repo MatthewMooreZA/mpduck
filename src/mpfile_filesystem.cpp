@@ -99,14 +99,21 @@ MPFileSchema ParseMPFileSchema(const string &raw) {
 			size_t comma = raw.find(',', pos);
 			bool has_comma = (comma != string::npos && comma < line_end_pos);
 
+			// Extract first field and uppercase it for case-insensitive indicator checks
+			size_t field_end = has_comma ? comma : line_end_pos;
+			string first_field_upper(raw, pos, field_end - pos);
+			for (auto &c : first_field_upper) {
+				c = (char)toupper((unsigned char)c);
+			}
+
 			if (indicator == '*') {
 				found_data = true;
 			} else if (indicator == '!' && has_comma) {
 				schema.column_names = SplitFields(raw, comma + 1, line_end_pos);
-			} else if (indicator == '&') {
+			} else if (first_field_upper == "VARIABLE_TYPES") {
 				if (found_data) {
 					throw IOException(
-					    "mpfile schema row ('&') found after data row ('*'); schema must precede all data rows");
+					    "mpfile schema row ('VARIABLE_TYPES') found after data row ('*'); schema must precede all data rows");
 				}
 				if (has_comma) {
 					auto fields = SplitFields(raw, comma + 1, line_end_pos);
