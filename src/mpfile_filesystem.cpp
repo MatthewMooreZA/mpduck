@@ -112,8 +112,8 @@ MPFileSchema ParseMPFileSchema(const string &raw) {
 				schema.column_names = SplitFields(raw, comma + 1, line_end_pos);
 			} else if (first_field_upper == "VARIABLE_TYPES") {
 				if (found_data) {
-					throw IOException(
-					    "mpfile schema row ('VARIABLE_TYPES') found after data row ('*'); schema must precede all data rows");
+					throw IOException("mpfile schema row ('VARIABLE_TYPES') found after data row ('*'); schema must "
+					                  "precede all data rows");
 				}
 				if (has_comma) {
 					auto fields = SplitFields(raw, comma + 1, line_end_pos);
