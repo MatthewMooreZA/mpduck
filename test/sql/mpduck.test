@@ -42,6 +42,13 @@ CODE	VARCHAR
 NAME	VARCHAR
 SCORE	DOUBLE
 
+# Header row indicator with trailing digit (!1) is treated the same as (!)
+query IIR rowsort
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/header_variation.rpt');
+----
+Alice	30	98.5
+Bob	25	72.0
+
 # Confirm the data round-trips correctly under the merged schema
 query IIIR rowsort
 SELECT NAME, AGE, CODE, SCORE FROM read_mpfile('test/data/glob_*.rpt');
