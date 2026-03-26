@@ -213,18 +213,46 @@ bool MPFileSystem::CanHandleFile(const string &path) {
 	return StringUtil::EndsWith(lower, ".rpt") || StringUtil::EndsWith(lower, ".prn");
 }
 
-unique_ptr<FileHandle> MPFileSystem::OpenFile(const string &path, FileOpenFlags flags,
-                                              optional_ptr<FileOpener> opener) {
-	auto local_fs = FileSystem::CreateLocal();
-	auto raw_handle = local_fs->OpenFile(path, FileOpenFlags::FILE_FLAGS_READ, opener);
+//! Process one complete line for CSV output. Strips the indicator field and appends
+//! the remainder to filtered for '!' and '*' rows. Returns false when the line marks
+//! the start of a footer and streaming should stop.
+static bool ProcessFilterLine(const string &line, string &filtered) {
+	if (line.empty()) {
+		return true;
+	}
+	char indicator = line[0];
+	if (indicator == '!' || indicator == '*') {
+		size_t comma = line.find(',');
+		if (comma != string::npos) {
+			filtered.append(line.data() + comma + 1, line.size() - comma - 1);
+			filtered += '\n';
+		}
+		return true;
+	}
+	if (indicator == '&') {
+		return true; // always skip
+	}
+	// Check for VARIABLE_TYPES (case-insensitive) — skip it; anything else is footer
+	size_t comma = line.find(',');
+	size_t field_end = (comma != string::npos) ? comma : line.size();
+	string first_field(line, 0, field_end);
+	for (auto &c : first_field) {
+		c = (char)toupper((unsigned char)c);
+	}
+	return first_field == "VARIABLE_TYPES";
+}
 
+//! Stream an mpfile, returning a filtered string containing only the content of
+//! '!' and '*' rows with the indicator field stripped. Stops at the first line
+//! whose indicator is not one of '!', '*', '&', or 'VARIABLE_TYPES'.
+static string FilterMPFileContent(FileHandle &raw_handle, FileSystem &local_fs) {
 	const idx_t CHUNK_SIZE = 65536;
 	string buf(CHUNK_SIZE, '\0');
 	string pending;
 	string filtered;
 
 	while (true) {
-		int64_t n = local_fs->Read(*raw_handle, &buf[0], CHUNK_SIZE);
+		int64_t n = local_fs.Read(raw_handle, &buf[0], CHUNK_SIZE);
 		if (n <= 0) {
 			break;
 		}
@@ -251,33 +279,9 @@ unique_ptr<FileHandle> MPFileSystem::OpenFile(const string &path, FileOpenFlags 
 			if (!line.empty() && line.back() == '\r') {
 				line.pop_back();
 			}
-			if (line.empty()) {
-				continue;
-			}
 
-			char indicator = line[0];
-			if (indicator == '!' || indicator == '*') {
-				size_t comma = line.find(',');
-				if (comma != string::npos) {
-					filtered.append(line.data() + comma + 1, line.size() - comma - 1);
-					filtered += '\n';
-				}
-			} else if (indicator == '&') {
-				// Always skip '&' rows
-			} else {
-				// Check for VARIABLE_TYPES (case-insensitive) — skip it; anything else is footer
-				size_t comma = line.find(',');
-				size_t field_end = (comma != string::npos) ? comma : line.size();
-				string first_field(line, 0, field_end);
-				for (auto &c : first_field) {
-					c = (char)toupper((unsigned char)c);
-				}
-				if (first_field != "VARIABLE_TYPES") {
-					done = true;
-				}
-			}
-
-			if (done) {
+			if (!ProcessFilterLine(line, filtered)) {
+				done = true;
 				break;
 			}
 		}
@@ -292,18 +296,17 @@ unique_ptr<FileHandle> MPFileSystem::OpenFile(const string &path, FileOpenFlags 
 		if (pending.back() == '\r') {
 			pending.pop_back();
 		}
-		if (!pending.empty()) {
-			char indicator = pending[0];
-			if (indicator == '!' || indicator == '*') {
-				size_t comma = pending.find(',');
-				if (comma != string::npos) {
-					filtered.append(pending.data() + comma + 1, pending.size() - comma - 1);
-					filtered += '\n';
-				}
-			}
-		}
+		ProcessFilterLine(pending, filtered);
 	}
 
+	return filtered;
+}
+
+unique_ptr<FileHandle> MPFileSystem::OpenFile(const string &path, FileOpenFlags flags,
+                                              optional_ptr<FileOpener> opener) {
+	auto local_fs = FileSystem::CreateLocal();
+	auto raw_handle = local_fs->OpenFile(path, FileOpenFlags::FILE_FLAGS_READ, opener);
+	auto filtered = FilterMPFileContent(*raw_handle, *local_fs);
 	return make_uniq<MPFileHandle>(*this, path, flags, std::move(filtered));
 }
 
