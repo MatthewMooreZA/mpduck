@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "make format-fix && make test || echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"reason\":\"make format-fix or make test failed — commit blocked\"}'",
+            "timeout": 300,
+            "statusMessage": "Running format-fix and tests before commit..."
+          }
+        ]
+      }
+    ]
+  }
+}

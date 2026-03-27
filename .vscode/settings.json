@@ -1,0 +1,4 @@
+{
+    "C_Cpp.default.compilerPath": "/usr/bin/g++",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/release/compile_commands.json"
+}
