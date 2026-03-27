@@ -172,3 +172,21 @@ SELECT NAME, AGE, SCORE, ACTIVE, DOB FROM read_mpfile('test/data/no_variable_typ
 ----
 Alice	30	98.5	true	1990-01-15
 Bob	25	72.3	false	1995-06-20
+
+# Mixed indicator variants across files: '!' and '!1' both normalise to the same indicator
+# column '!', so schema merging produces exactly one '!' column and the EXCLUDE step works.
+query TIT rowsort
+SELECT NAME, AGE, CITY FROM read_mpfile(['test/data/mixed_indicator_a.rpt', 'test/data/mixed_indicator_b.rpt']);
+----
+Alice	30	London
+Bob	25	Paris
+
+# The merged schema must contain no '!' column — only the data columns.
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_mpfile(['test/data/mixed_indicator_a.rpt', 'test/data/mixed_indicator_b.rpt']))
+ORDER BY column_name;
+----
+AGE	SMALLINT
+CITY	VARCHAR
+NAME	VARCHAR

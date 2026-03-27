@@ -16,8 +16,21 @@ namespace duckdb {
 // (e.g. httpfs for https://) instead of recursing back into MPFileSystem.
 static thread_local bool t_mpfs_opening = false;
 
-MPFileHandle::MPFileHandle(FileSystem &fs, const string &path, FileOpenFlags flags, string content_p)
-    : FileHandle(fs, path, flags), content(std::move(content_p)), position(0) {
+struct ScopedMPFSBypass {
+	bool prev;
+	ScopedMPFSBypass() : prev(t_mpfs_opening) {
+		t_mpfs_opening = true;
+	}
+	~ScopedMPFSBypass() {
+		t_mpfs_opening = prev;
+	}
+};
+
+MPFileHandle::MPFileHandle(FileSystem &fs, const string &path, FileOpenFlags flags, string header_p,
+                           unique_ptr<FileSystem> owned_fs_p, FileSystem *raw_fs_p, unique_ptr<FileHandle> raw_handle_p,
+                           idx_t data_start_p, idx_t data_end_p)
+    : FileHandle(fs, path, flags), header(std::move(header_p)), owned_fs(std::move(owned_fs_p)), raw_fs(raw_fs_p),
+      raw_handle(std::move(raw_handle_p)), data_start(data_start_p), data_end(data_end_p), position(0) {
 }
 
 static vector<string> SplitFields(const string &raw, size_t start, size_t end) {
@@ -30,6 +43,77 @@ static vector<string> SplitFields(const string &raw, size_t start, size_t end) {
 		}
 	}
 	return fields;
+}
+
+static string GetFirstFieldUpper(const string &line) {
+	size_t end = line.find(',');
+	if (end == string::npos) {
+		end = line.size();
+	}
+	string field(line, 0, end);
+	for (auto &c : field) {
+		c = (char)toupper((unsigned char)c);
+	}
+	return field;
+}
+
+//! Calls callback(line) for each complete, CR-stripped line in handle.
+//! Returns false from the callback to stop iteration early.
+template <typename F>
+static void ForEachLine(FileHandle &handle, F &&callback) {
+	const idx_t CHUNK_SIZE = 65536;
+	string buf(CHUNK_SIZE, '\0');
+	string pending;
+
+	while (true) {
+		int64_t n = handle.file_system.Read(handle, &buf[0], CHUNK_SIZE);
+		if (n <= 0) {
+			break;
+		}
+
+		size_t chunk_pos = 0;
+		bool done = false;
+
+		while (chunk_pos < static_cast<size_t>(n)) {
+			size_t nl = chunk_pos;
+			while (nl < static_cast<size_t>(n) && buf[nl] != '\n') {
+				nl++;
+			}
+
+			if (nl == static_cast<size_t>(n)) {
+				pending.append(buf.data() + chunk_pos, n - chunk_pos);
+				chunk_pos = n;
+				continue;
+			}
+
+			string line = pending + string(buf.data() + chunk_pos, nl - chunk_pos);
+			pending.clear();
+			chunk_pos = nl + 1;
+
+			if (!line.empty() && line.back() == '\r') {
+				line.pop_back();
+			}
+
+			if (!callback(line)) {
+				done = true;
+				break;
+			}
+		}
+
+		if (done) {
+			break;
+		}
+	}
+
+	// Flush a final partial line if the file does not end with '\n'
+	if (!pending.empty()) {
+		if (pending.back() == '\r') {
+			pending.pop_back();
+		}
+		if (!pending.empty()) {
+			callback(pending);
+		}
+	}
 }
 
 static string MapMPType(const string &mp_type, size_t col_idx) {
@@ -52,114 +136,48 @@ static string MapMPType(const string &mp_type, size_t col_idx) {
 MPFileSchema ParseMPFileSchema(const string &path, FileSystem &fs) {
 	MPFileSchema schema;
 
-	t_mpfs_opening = true;
 	unique_ptr<FileHandle> handle;
 	try {
+		ScopedMPFSBypass bypass;
 		handle = fs.OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
-		t_mpfs_opening = false;
 	} catch (...) {
-		t_mpfs_opening = false;
 		return schema;
 	}
 
-	const idx_t CHUNK_SIZE = 65536;
-	string buf(CHUNK_SIZE, '\0');
-	string pending;
-
-	while (true) {
-		int64_t n = handle->file_system.Read(*handle, &buf[0], CHUNK_SIZE);
-		if (n <= 0) {
-			break;
+	ForEachLine(*handle, [&](const string &line) -> bool {
+		if (line.empty()) {
+			return true;
 		}
 
-		size_t chunk_pos = 0;
-		bool done = false;
+		char indicator = line[0];
+		size_t comma = line.find(',');
+		bool has_comma = (comma != string::npos);
 
-		while (chunk_pos < static_cast<size_t>(n)) {
-			// Find the next newline within the current chunk
-			size_t nl = chunk_pos;
-			while (nl < static_cast<size_t>(n) && buf[nl] != '\n') {
-				nl++;
-			}
-
-			if (nl == static_cast<size_t>(n)) {
-				// No newline — carry the remainder forward into pending
-				pending.append(buf.data() + chunk_pos, n - chunk_pos);
-				chunk_pos = n;
-				continue;
-			}
-
-			// Complete line: pending prefix + chunk[chunk_pos..nl)
-			string line = pending + string(buf.data() + chunk_pos, nl - chunk_pos);
-			pending.clear();
-			chunk_pos = nl + 1;
-
-			if (!line.empty() && line.back() == '\r') {
-				line.pop_back();
-			}
-			if (line.empty()) {
-				continue;
-			}
-
-			char indicator = line[0];
-			size_t comma = line.find(',');
-			bool has_comma = (comma != string::npos);
-
-			if (indicator == '*') {
-				// First data row — nothing more to learn
-				done = true;
-			} else if (indicator == '!' && has_comma) {
-				schema.column_names = SplitFields(line, comma + 1, line.size());
-			} else if (indicator == '&') {
-				// Always skip '&' rows
-			} else {
-				// Check for VARIABLE_TYPES (case-insensitive)
-				size_t field_end = has_comma ? comma : line.size();
-				string first_field(line, 0, field_end);
-				for (auto &c : first_field) {
-					c = (char)toupper((unsigned char)c);
+		if (indicator == '*') {
+			// First data row — nothing more to learn
+			return false;
+		} else if (indicator == '!' && has_comma) {
+			schema.column_names.clear();
+			schema.column_names.push_back("!");
+			auto names = SplitFields(line, comma + 1, line.size());
+			schema.column_names.insert(schema.column_names.end(), names.begin(), names.end());
+		} else if (indicator == '&') {
+			// Always skip '&' rows
+		} else if (GetFirstFieldUpper(line) == "VARIABLE_TYPES") {
+			if (has_comma) {
+				auto fields = SplitFields(line, comma + 1, line.size());
+				for (size_t i = 0; i < fields.size(); i++) {
+					schema.column_types.push_back(MapMPType(fields[i], i));
 				}
-				if (first_field == "VARIABLE_TYPES") {
-					if (has_comma) {
-						auto fields = SplitFields(line, comma + 1, line.size());
-						// fields[0] is the type for the indicator column itself — skip it to align with column names
-						for (size_t i = 1; i < fields.size(); i++) {
-							schema.column_types.push_back(MapMPType(fields[i], i - 1));
-						}
-						schema.found = true;
-					}
-				} else {
-					// Unrecognised line — pre-data metadata (e.g. "Output_Format", "NUMLINES").
-					// Schema parsing always stops at the first '*' row so it never reaches
-					// the real footer; skip these lines rather than stopping early.
-				}
-			}
-
-			if (done) {
-				break;
+				schema.found = true;
 			}
 		}
+		// Unrecognised lines — pre-data metadata (e.g. "Output_Format", "NUMLINES").
+		// Schema parsing always stops at the first '*' row so it never reaches
+		// the real footer; skip these lines rather than stopping early.
 
-		if (done) {
-			break;
-		}
-	}
-
-	// Handle a final partial line if the file does not end with '\n'
-	if (!pending.empty()) {
-		if (pending.back() == '\r') {
-			pending.pop_back();
-		}
-		if (!pending.empty()) {
-			char indicator = pending[0];
-			size_t comma = pending.find(',');
-			bool has_comma = (comma != string::npos);
-			if (indicator == '!' && has_comma) {
-				schema.column_names = SplitFields(pending, comma + 1, pending.size());
-			}
-			// VARIABLE_TYPES or footer at EOF: leave schema as-is
-		}
-	}
+		return true;
+	});
 
 	return schema;
 }
@@ -236,129 +254,216 @@ bool MPFileSystem::CanHandleFile(const string &path) {
 	return StringUtil::EndsWith(lower, ".rpt") || StringUtil::EndsWith(lower, ".prn");
 }
 
-//! Process one complete line for CSV output. Strips the indicator field and appends
-//! the remainder to filtered for '!' and '*' rows. Returns false when the line marks
-//! the start of a footer and streaming should stop.
-//! seen_data tracks whether any '*' row has been emitted. Unrecognised lines are only
-//! treated as the footer start once at least one data row has been seen; before that
-//! they are pre-data metadata (e.g. "Output_Format", "NUMLINES") and are silently skipped.
-static bool ProcessFilterLine(const string &line, string &filtered, bool &seen_data) {
-	if (line.empty()) {
-		return true;
+//! Returns the byte offset of the first character of the line that contains pos.
+static size_t LineStart(const char *data, size_t pos) {
+	while (pos > 0 && data[pos - 1] != '\n') {
+		pos--;
 	}
-	char indicator = line[0];
-	if (indicator == '*') {
-		seen_data = true;
-		size_t comma = line.find(',');
-		if (comma != string::npos) {
-			filtered.append(line.data() + comma + 1, line.size() - comma - 1);
-			filtered += '\n';
-		}
-		return true;
-	}
-	if (indicator == '!') {
-		size_t comma = line.find(',');
-		if (comma != string::npos) {
-			filtered.append(line.data() + comma + 1, line.size() - comma - 1);
-			filtered += '\n';
-		}
-		return true;
-	}
-	if (indicator == '&') {
-		return true; // always skip
-	}
-	// Check for VARIABLE_TYPES (case-insensitive) — skip it
-	size_t comma = line.find(',');
-	size_t field_end = (comma != string::npos) ? comma : line.size();
-	string first_field(line, 0, field_end);
-	for (auto &c : first_field) {
-		c = (char)toupper((unsigned char)c);
-	}
-	if (first_field == "VARIABLE_TYPES") {
-		return true;
-	}
-	// Unrecognised line: footer only if we have already emitted data rows.
-	// Before the first '*' row these are pre-data metadata lines — skip them.
-	return !seen_data;
+	return pos;
 }
 
-//! Stream an mpfile, returning a filtered string containing only the content of
-//! '!' and '*' rows with the indicator field stripped. Stops at the first
-//! unrecognised line that follows at least one '*' data row (i.e. the footer).
-//! Unrecognised lines before any '*' row are pre-data metadata and are skipped.
-static string FilterMPFileContent(FileHandle &raw_handle) {
+//! Binary-searches [data_start, n] from the end to find the first byte after the last
+//! '*' row (i.e. the start of the footer, or n if there is no footer).
+//! The footer is assumed to be very small so convergence is fast.
+//! The indicator column is never inside quotes, so plain '\n' scanning suffices here.
+static size_t FindDataBlockEnd(const char *data, size_t n, size_t data_start) {
+	if (data_start >= n) {
+		return n;
+	}
+
+	const size_t LINEAR_THRESHOLD = 256;
+	size_t lo = data_start;
+	size_t hi = n;
+
+	while (hi - lo > LINEAR_THRESHOLD) {
+		size_t mid = lo + (hi - lo) / 2;
+		size_t ls = LineStart(data, mid);
+		if (ls < data_start) {
+			ls = data_start;
+		}
+		if (data[ls] == '*') {
+			lo = mid;
+		} else {
+			hi = ls;
+		}
+	}
+
+	// Linear scan to pinpoint the exact boundary.
+	size_t pos = LineStart(data, lo);
+	if (pos < data_start) {
+		pos = data_start;
+	}
+	while (pos < hi) {
+		if (data[pos] != '*') {
+			return pos;
+		}
+		const char *nl = static_cast<const char *>(memchr(data + pos, '\n', hi - pos));
+		if (!nl) {
+			break;
+		}
+		pos = static_cast<size_t>(nl - data) + 1;
+	}
+	return hi;
+}
+
+struct PreDataScan {
+	string header;    //! normalised '!' rows ready for CSV consumption
+	idx_t data_start; //! absolute file offset of the first '*' row
+};
+
+//! Reads the pre-data section of raw_handle sequentially, building the normalised
+//! CSV header from '!' rows and returning the file offset of the first '*' row.
+//! After this call the handle position is somewhere past data_start due to chunk
+//! over-read; callers must use random-access reads for all subsequent I/O.
+static PreDataScan ScanPreDataSection(FileHandle &raw_handle, FileSystem &raw_fs) {
 	const idx_t CHUNK_SIZE = 65536;
-	string buf(CHUNK_SIZE, '\0');
-	string pending;
-	string filtered;
-	bool seen_data = false;
+	vector<char> buf(CHUNK_SIZE);
+
+	PreDataScan result;
+	result.data_start = 0;
+
+	string pending;       // incomplete line spanning a chunk boundary
+	idx_t file_pos = 0;   // absolute offset of the first byte of the current chunk
+	idx_t line_start = 0; // absolute offset of the first byte of the current pending line
 
 	while (true) {
-		int64_t n = raw_handle.file_system.Read(raw_handle, &buf[0], CHUNK_SIZE);
+		int64_t n = raw_fs.Read(raw_handle, buf.data(), CHUNK_SIZE);
 		if (n <= 0) {
-			break;
+			// Flush a final partial line (file does not end with '\n').
+			if (!pending.empty()) {
+				if (pending.back() == '\r') {
+					pending.pop_back();
+				}
+				if (!pending.empty() && pending[0] == '*') {
+					result.data_start = line_start;
+					return result;
+				}
+			}
+			result.data_start = file_pos; // no data block found
+			return result;
 		}
 
-		size_t chunk_pos = 0;
-		bool done = false;
-
-		while (chunk_pos < static_cast<size_t>(n)) {
-			size_t nl = chunk_pos;
-			while (nl < static_cast<size_t>(n) && buf[nl] != '\n') {
-				nl++;
+		idx_t chunk_pos = 0;
+		while (chunk_pos < static_cast<idx_t>(n)) {
+			// Track where the current pending line starts in the file.
+			if (pending.empty()) {
+				line_start = file_pos + chunk_pos;
 			}
 
-			if (nl == static_cast<size_t>(n)) {
+			// Find the next '\n' within this chunk.
+			const char *nl_p = static_cast<const char *>(memchr(buf.data() + chunk_pos, '\n', n - chunk_pos));
+			if (!nl_p) {
+				// No newline — buffer the remainder and fetch the next chunk.
 				pending.append(buf.data() + chunk_pos, n - chunk_pos);
-				chunk_pos = n;
-				continue;
-			}
-
-			string line = pending + string(buf.data() + chunk_pos, nl - chunk_pos);
-			pending.clear();
-			chunk_pos = nl + 1;
-
-			if (!line.empty() && line.back() == '\r') {
-				line.pop_back();
-			}
-
-			if (!ProcessFilterLine(line, filtered, seen_data)) {
-				done = true;
 				break;
 			}
+
+			idx_t nl_idx = static_cast<idx_t>(nl_p - buf.data());
+
+			// Assemble the complete line (may span two chunks via pending).
+			const char *line_data;
+			idx_t line_len;
+			string assembled;
+			if (pending.empty()) {
+				line_data = buf.data() + chunk_pos;
+				line_len = nl_idx - chunk_pos;
+			} else {
+				assembled = pending + string(buf.data() + chunk_pos, nl_idx - chunk_pos);
+				line_data = assembled.data();
+				line_len = assembled.size();
+				pending.clear();
+			}
+			if (line_len > 0 && line_data[line_len - 1] == '\r') {
+				line_len--;
+			}
+
+			// Process the line.
+			if (line_len > 0) {
+				char indicator = line_data[0];
+				if (indicator == '*') {
+					result.data_start = line_start;
+					return result;
+				}
+				if (indicator == '!') {
+					const char *comma = static_cast<const char *>(memchr(line_data, ',', line_len));
+					if (comma) {
+						idx_t comma_idx = static_cast<idx_t>(comma - line_data);
+						result.header += '!';
+						result.header.append(line_data + comma_idx, line_len - comma_idx);
+						result.header += '\n';
+					}
+				}
+			}
+
+			chunk_pos = nl_idx + 1;
 		}
 
-		if (done) {
-			break;
-		}
+		file_pos += n;
+	}
+}
+
+//! Returns the file offset one past the last '*' row (= start of footer, or file_size).
+//! Reads only the tail of the raw file to avoid loading the entire data block.
+static idx_t FindDataEnd(FileHandle &raw_handle, FileSystem &raw_fs, idx_t file_size, idx_t data_start) {
+	if (data_start >= file_size) {
+		return data_start;
 	}
 
-	// Handle a final partial line if the file does not end with '\n'
-	if (!pending.empty()) {
-		if (pending.back() == '\r') {
-			pending.pop_back();
-		}
-		ProcessFilterLine(pending, filtered, seen_data);
+	const idx_t TAIL_SIZE = 65536;
+	idx_t tail_offset = (file_size > TAIL_SIZE) ? (file_size - TAIL_SIZE) : 0;
+	if (tail_offset < data_start) {
+		tail_offset = data_start;
+	}
+	idx_t tail_len = file_size - tail_offset;
+
+	// Allocate without zero-initialising: 'new char[n]' default-initialises (indeterminate)
+	// whereas 'new char[n]()' or vector/string constructors would zero-fill needlessly.
+	// Every byte is overwritten by the Read call immediately below.
+	auto tail = unique_ptr<char[]>(new char[tail_len]);
+	raw_fs.Read(raw_handle, tail.get(), static_cast<int64_t>(tail_len), tail_offset);
+
+	size_t rel_data_start = (data_start >= tail_offset) ? (data_start - tail_offset) : 0;
+	size_t rel_data_end = FindDataBlockEnd(tail.get(), tail_len, rel_data_start);
+	return tail_offset + rel_data_end;
+}
+
+//! Copies len bytes of the filtered stream starting at from into dst.
+//! Positions in [0, header.size()) come from the in-memory header buffer;
+//! positions in [header.size(), total_size) are piped directly from the raw file.
+static void DoRead(MPFileHandle &mph, char *dst, idx_t len, idx_t from) {
+	idx_t header_size = mph.header.size();
+
+	// Part 1: serve from the in-memory header.
+	if (from < header_size && len > 0) {
+		idx_t n = MinValue(header_size - from, len);
+		memcpy(dst, mph.header.data() + from, n);
+		dst += n;
+		len -= n;
+		from += n;
 	}
 
-	return filtered;
+	// Part 2: pipe directly from the raw file (no copy into an intermediate buffer).
+	if (len > 0) {
+		idx_t raw_offset = mph.data_start + (from - header_size);
+		mph.raw_fs->Read(*mph.raw_handle, dst, static_cast<int64_t>(len), raw_offset);
+	}
 }
 
 unique_ptr<FileHandle> MPFileSystem::OpenFile(const string &path, FileOpenFlags flags,
                                               optional_ptr<FileOpener> opener) {
 	auto db = FileOpener::TryGetDatabase(opener);
-	unique_ptr<FileSystem> owned_local;
+	unique_ptr<FileSystem> owned_fs;
 	FileSystem *raw_fs;
 	if (db) {
 		raw_fs = &db->GetFileSystem();
 	} else {
-		owned_local = FileSystem::CreateLocal();
-		raw_fs = owned_local.get();
+		owned_fs = FileSystem::CreateLocal();
+		raw_fs = owned_fs.get();
 	}
 
-	t_mpfs_opening = true;
 	unique_ptr<FileHandle> raw_handle;
-	try {
+	{
+		ScopedMPFSBypass bypass;
 		// When raw_fs is the database's OpenerFileSystem the opener is injected
 		// automatically, so we must not pass it explicitly.
 		if (db) {
@@ -366,38 +471,44 @@ unique_ptr<FileHandle> MPFileSystem::OpenFile(const string &path, FileOpenFlags 
 		} else {
 			raw_handle = raw_fs->OpenFile(path, FileOpenFlags::FILE_FLAGS_READ, opener);
 		}
-		t_mpfs_opening = false;
-	} catch (...) {
-		t_mpfs_opening = false;
-		throw;
 	}
 
-	auto filtered = FilterMPFileContent(*raw_handle);
-	return make_uniq<MPFileHandle>(*this, path, flags, std::move(filtered));
+	idx_t file_size = static_cast<idx_t>(raw_fs->GetFileSize(*raw_handle));
+
+	// Sequential scan of the tiny pre-data section to build the normalised header.
+	auto scan = ScanPreDataSection(*raw_handle, *raw_fs);
+
+	// Single random-access read of the tail to locate the end of the data block.
+	idx_t data_end = FindDataEnd(*raw_handle, *raw_fs, file_size, scan.data_start);
+
+	return make_uniq<MPFileHandle>(*this, path, flags, std::move(scan.header), std::move(owned_fs), raw_fs,
+	                               std::move(raw_handle), scan.data_start, data_end);
 }
 
 int64_t MPFileSystem::Read(FileHandle &handle, void *buffer, int64_t nr_bytes) {
 	auto &mph = handle.Cast<MPFileHandle>();
-	auto available = static_cast<int64_t>(mph.content.size()) - static_cast<int64_t>(mph.position);
+	idx_t total_size = mph.header.size() + (mph.data_end - mph.data_start);
+	auto available = static_cast<int64_t>(total_size) - static_cast<int64_t>(mph.position);
 	auto to_read = MinValue<int64_t>(nr_bytes, MaxValue<int64_t>(available, 0));
 	if (to_read > 0) {
-		memcpy(buffer, mph.content.data() + mph.position, to_read);
-		mph.position += to_read;
+		DoRead(mph, static_cast<char *>(buffer), static_cast<idx_t>(to_read), mph.position);
+		mph.position += static_cast<idx_t>(to_read);
 	}
 	return to_read;
 }
 
 void MPFileSystem::Read(FileHandle &handle, void *buffer, int64_t nr_bytes, idx_t location) {
 	auto &mph = handle.Cast<MPFileHandle>();
-	if (location + static_cast<idx_t>(nr_bytes) > mph.content.size()) {
+	idx_t total_size = mph.header.size() + (mph.data_end - mph.data_start);
+	if (location + static_cast<idx_t>(nr_bytes) > total_size) {
 		throw IOException("MPFileSystem: read past end of filtered file content");
 	}
-	memcpy(buffer, mph.content.data() + location, nr_bytes);
+	DoRead(mph, static_cast<char *>(buffer), static_cast<idx_t>(nr_bytes), location);
 }
 
 int64_t MPFileSystem::GetFileSize(FileHandle &handle) {
 	auto &mph = handle.Cast<MPFileHandle>();
-	return static_cast<int64_t>(mph.content.size());
+	return static_cast<int64_t>(mph.header.size() + (mph.data_end - mph.data_start));
 }
 
 void MPFileSystem::Seek(FileHandle &handle, idx_t location) {

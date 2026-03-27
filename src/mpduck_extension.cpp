@@ -10,22 +10,24 @@
 #include "duckdb/main/config.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/expression/star_expression.hpp"
+#include "duckdb/parser/query_node/select_node.hpp"
+#include "duckdb/parser/statement/select_statement.hpp"
+#include "duckdb/parser/tableref/subqueryref.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 
 namespace duckdb {
 
-//! Build a read_csv_auto TableFunctionRef for the given list of paths.
+//! Build a read_csv_auto ref for the given list of paths, wrapped in SELECT * EXCLUDE ("!").
 //! When a schema is provided its column types are forwarded via the dtypes parameter.
-static unique_ptr<TableFunctionRef> MakeReadCSVRefFromPaths(const vector<string> &paths,
-                                                            const MPFileSchema &schema) {
+static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths, const MPFileSchema &schema) {
 	vector<unique_ptr<ParsedExpression>> children;
 	vector<Value> path_values;
 	path_values.reserve(paths.size());
 	for (const auto &p : paths) {
 		path_values.push_back(Value(p));
 	}
-	children.push_back(
-	    make_uniq<ConstantExpression>(Value::LIST(LogicalType::VARCHAR, std::move(path_values))));
+	children.push_back(make_uniq<ConstantExpression>(Value::LIST(LogicalType::VARCHAR, std::move(path_values))));
 
 	auto union_by_name = make_uniq<ConstantExpression>(Value::BOOLEAN(true));
 	union_by_name->SetAlias("union_by_name");
@@ -44,11 +46,22 @@ static unique_ptr<TableFunctionRef> MakeReadCSVRefFromPaths(const vector<string>
 
 	auto table_function = make_uniq<TableFunctionRef>();
 	table_function->function = make_uniq<FunctionExpression>("read_csv_auto", std::move(children));
-	return table_function;
+
+	// Wrap in SELECT * EXCLUDE ("!") to hide the indicator column from callers.
+	auto select_node = make_uniq<SelectNode>();
+	auto star = make_uniq<StarExpression>();
+	star->exclude_list.insert(QualifiedColumnName("!"));
+	select_node->select_list.push_back(std::move(star));
+	select_node->from_table = std::move(table_function);
+
+	auto select_stmt = make_uniq<SelectStatement>();
+	select_stmt->node = std::move(select_node);
+
+	return make_uniq<SubqueryRef>(std::move(select_stmt));
 }
 
-//! Build a read_csv_auto TableFunctionRef for a single path (wraps MakeReadCSVRefFromPaths).
-static unique_ptr<TableFunctionRef> MakeReadCSVRef(const string &path, const MPFileSchema &schema) {
+//! Build a read_csv_auto ref for a single path (wraps MakeReadCSVRefFromPaths).
+static unique_ptr<TableRef> MakeReadCSVRef(const string &path, const MPFileSchema &schema) {
 	return MakeReadCSVRefFromPaths({path}, schema);
 }
 

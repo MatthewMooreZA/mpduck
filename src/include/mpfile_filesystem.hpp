@@ -23,12 +23,19 @@ MPFileSchema MergeSchemas(const vector<MPFileSchema> &schemas);
 
 class MPFileHandle : public FileHandle {
 public:
-	MPFileHandle(FileSystem &fs, const string &path, FileOpenFlags flags, string content);
+	MPFileHandle(FileSystem &fs, const string &path, FileOpenFlags flags, string header_p,
+	             unique_ptr<FileSystem> owned_fs_p, FileSystem *raw_fs_p, unique_ptr<FileHandle> raw_handle_p,
+	             idx_t data_start_p, idx_t data_end_p);
 	void Close() override {
 	}
 
-	string content;
-	idx_t position;
+	string header;                     //! normalised '!' rows; served from position 0
+	unique_ptr<FileSystem> owned_fs;   //! owns raw_fs when there is no DB context
+	FileSystem *raw_fs;                //! underlying filesystem for data-block I/O
+	unique_ptr<FileHandle> raw_handle; //! handle into the original .rpt/.prn file
+	idx_t data_start;                  //! raw-file offset of first '*' row
+	idx_t data_end;                    //! raw-file offset one-past the last '*' row
+	idx_t position;                    //! current position in the filtered stream
 };
 
 class MPFileSystem : public FileSystem {
