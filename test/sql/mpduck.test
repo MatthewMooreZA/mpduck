@@ -22,10 +22,13 @@ COUNT	INTEGER
 NAME	VARCHAR
 SCORE	DOUBLE
 
-# Glob: schemas are merged across files, widening types where they differ.
-# glob_a: NAME=VARCHAR, AGE=SMALLINT, SCORE=DOUBLE,   CODE=VARCHAR
-# glob_b: NAME=VARCHAR, AGE=INTEGER,  SCORE=INTEGER,  CODE=VARCHAR
-# merged: NAME=VARCHAR, AGE=INTEGER,  SCORE=DOUBLE,   CODE=VARCHAR
+# Glob: schemas are merged across all matching files, widening types where they differ.
+# glob_a:  NAME=VARCHAR, AGE=SMALLINT, SCORE=DOUBLE,  CODE=VARCHAR
+# glob_a2: NAME=VARCHAR, SALARY=DOUBLE, DEPT=VARCHAR
+# glob_b:  NAME=VARCHAR, AGE=INTEGER,  SCORE=INTEGER, CODE=VARCHAR
+# glob_b2: NAME=VARCHAR, RATING=DOUBLE, GRADE=VARCHAR
+# merged:  NAME=VARCHAR, AGE=INTEGER, SCORE=DOUBLE, CODE=VARCHAR,
+#          SALARY=DOUBLE, DEPT=VARCHAR, RATING=DOUBLE, GRADE=VARCHAR
 query II
 SELECT column_name, column_type
 FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/glob_*.rpt'))
@@ -33,7 +36,11 @@ ORDER BY column_name;
 ----
 AGE	INTEGER
 CODE	VARCHAR
+DEPT	VARCHAR
+GRADE	VARCHAR
 NAME	VARCHAR
+RATING	DOUBLE
+SALARY	DOUBLE
 SCORE	DOUBLE
 
 # Rows starting with '&' are ignored (not treated as schema rows)
@@ -66,9 +73,102 @@ Brachiosaurus	26.0	1900
 T_Rex	12.3	1902
 Velociraptor	1.8	1924
 
-# Confirm the data round-trips correctly under the merged schema
+# Confirm data round-trips correctly: glob_*.rpt now covers all four glob files;
+# NAME is the column present in every file.
+query T rowsort
+SELECT NAME FROM read_mpfile('test/data/glob_*.rpt');
+----
+Alice
+Bob
+Charlie
+Diana
+
+# List overload: explicit list of files — schemas merged, rows combined
 query IIIR rowsort
-SELECT NAME, AGE, CODE, SCORE FROM read_mpfile('test/data/glob_*.rpt');
+SELECT NAME, AGE, CODE, SCORE FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt']);
 ----
 Alice	30	ABC	98.5
 Bob	25	XYZ	72.0
+
+# List overload: single glob entry expands to all matching files; NAME is present in all four
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_*.rpt']);
+----
+Alice
+Bob
+Charlie
+Diana
+
+# List overload: schema merging across list entries (AGE widened SMALLINT→INTEGER, SCORE widened →DOUBLE)
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt']))
+ORDER BY column_name;
+----
+AGE	INTEGER
+CODE	VARCHAR
+NAME	VARCHAR
+SCORE	DOUBLE
+
+# List overload: two glob patterns each matching multiple files.
+# glob_a*.rpt → glob_a.rpt (NAME,AGE,SCORE,CODE) + glob_a2.rpt (NAME,SALARY,DEPT)
+# glob_b*.rpt → glob_b.rpt (NAME,AGE,SCORE,CODE) + glob_b2.rpt (NAME,RATING,GRADE)
+# NAME is the only column present in all four files; selecting it gives a clean equality check.
+# Results must equal the equivalent explicit file list.
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_a*.rpt', 'test/data/glob_b*.rpt']);
+----
+Alice
+Bob
+Charlie
+Diana
+
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt', 'test/data/glob_b.rpt', 'test/data/glob_b2.rpt']);
+----
+Alice
+Bob
+Charlie
+Diana
+
+# List overload: two glob patterns (each matching multiple files) plus one explicit file.
+# footer.rpt contributes Alice and Bob; all six rows are union'd via union_by_name.
+# Results must equal the equivalent explicit file list.
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_a*.rpt', 'test/data/glob_b*.rpt', 'test/data/footer.rpt']);
+----
+Alice
+Alice
+Bob
+Bob
+Charlie
+Diana
+
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt', 'test/data/glob_b.rpt', 'test/data/glob_b2.rpt', 'test/data/footer.rpt']);
+----
+Alice
+Alice
+Bob
+Bob
+Charlie
+Diana
+
+# No VARIABLE_TYPES row — types are inferred by read_csv_auto from the data values.
+# One column of each inferred type: VARCHAR, BIGINT, DOUBLE, BOOLEAN, DATE.
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/no_variable_types.rpt'))
+ORDER BY column_name;
+----
+ACTIVE	BOOLEAN
+AGE	BIGINT
+DOB	DATE
+NAME	VARCHAR
+SCORE	DOUBLE
+
+query TIRTT rowsort
+SELECT NAME, AGE, SCORE, ACTIVE, DOB FROM read_mpfile('test/data/no_variable_types.rpt');
+----
+Alice	30	98.5	true	1990-01-15
+Bob	25	72.3	false	1995-06-20
