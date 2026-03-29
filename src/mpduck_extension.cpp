@@ -2,6 +2,7 @@
 
 #include "mpduck_extension.hpp"
 #include "mpfile_filesystem.hpp"
+#include "write_mpfile.hpp"
 
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
@@ -161,6 +162,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	// Implicit scan: SELECT * FROM 'file.rpt'
 	DBConfig::GetConfig(db_instance).replacement_scans.emplace_back(ReadMPFileReplacement);
+
+	// COPY TO with FORMAT mpfile
+	RegisterWriteMPFile(loader);
 }
 
 void MpduckExtension::Load(ExtensionLoader &loader) {

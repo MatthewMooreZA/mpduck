@@ -205,3 +205,75 @@ SELECT NAME, AGE FROM read_mpfile('test/data/large_footer.rpt');
 ----
 Alice	30
 Bob	25
+
+# write_mpfile: round-trip all four VARIABLE_TYPES codes (T→VARCHAR, S→SMALLINT, N→DOUBLE, I→INTEGER)
+statement ok
+COPY (
+  SELECT 'Alice' AS NAME, CAST(30 AS SMALLINT) AS AGE, 98.5 AS SCORE, 'ABC123' AS CODE, 7 AS COUNT
+) TO '__TEST_DIR__/write_basic.rpt' (FORMAT mpfile);
+
+query TIRTI rowsort
+SELECT NAME, AGE, SCORE, CODE, COUNT FROM read_mpfile('__TEST_DIR__/write_basic.rpt');
+----
+Alice	30	98.5	ABC123	7
+
+# write_mpfile: schema types are preserved via the VARIABLE_TYPES row
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_mpfile('__TEST_DIR__/write_basic.rpt'))
+ORDER BY column_name;
+----
+AGE	SMALLINT
+CODE	VARCHAR
+COUNT	INTEGER
+NAME	VARCHAR
+SCORE	DOUBLE
+
+# write_mpfile: multiple data rows
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('Alice', CAST(30 AS SMALLINT), 98.5),
+    ('Bob',   CAST(25 AS SMALLINT), 72.0)
+  ) t(NAME, AGE, SCORE)
+) TO '__TEST_DIR__/write_multi.rpt' (FORMAT mpfile);
+
+query TIR rowsort
+SELECT NAME, AGE, SCORE FROM read_mpfile('__TEST_DIR__/write_multi.rpt');
+----
+Alice	30	98.5
+Bob	25	72.0
+
+# write_mpfile: string values containing commas and double-quotes round-trip correctly
+statement ok
+COPY (
+  SELECT 'value,with,commas' AS A, 'value"with"quotes' AS B
+) TO '__TEST_DIR__/write_special.rpt' (FORMAT mpfile);
+
+query TT rowsort
+SELECT A, B FROM read_mpfile('__TEST_DIR__/write_special.rpt');
+----
+value,with,commas	value"with"quotes
+
+# Round-trip: read an existing sample file, write it back, confirm data and types are preserved.
+# schema.rpt exercises all four mpfile type codes: T (VARCHAR), S (SMALLINT), N (DOUBLE), I (INTEGER).
+statement ok
+COPY (SELECT * FROM read_mpfile('test/data/schema.rpt'))
+  TO '__TEST_DIR__/roundtrip.rpt' (FORMAT mpfile);
+
+query TIRTI rowsort
+SELECT NAME, AGE, SCORE, CODE, COUNT FROM read_mpfile('__TEST_DIR__/roundtrip.rpt');
+----
+Alice	30	98.5	ABC123	7
+Bob	25	72.0	XYZ999	3
+
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_mpfile('__TEST_DIR__/roundtrip.rpt'))
+ORDER BY column_name;
+----
+AGE	SMALLINT
+CODE	VARCHAR
+COUNT	INTEGER
+NAME	VARCHAR
+SCORE	DOUBLE

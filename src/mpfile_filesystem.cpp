@@ -498,6 +498,13 @@ unique_ptr<FileHandle> MPFileSystem::OpenFile(const string &path, FileOpenFlags 
 		raw_fs = owned_fs.get();
 	}
 
+	// Delegate write-mode opens to the underlying FS without any mpfile processing
+	// (there is nothing to filter when creating or overwriting a file).
+	if (flags.OpenForWriting()) {
+		ScopedMPFSBypass bypass;
+		return raw_fs->OpenFile(path, flags, opener);
+	}
+
 	unique_ptr<FileHandle> raw_handle;
 	{
 		ScopedMPFSBypass bypass;

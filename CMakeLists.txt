@@ -11,7 +11,8 @@ include_directories(src/include)
 
 set(EXTENSION_SOURCES
     src/mpduck_extension.cpp
-    src/mpfile_filesystem.cpp)
+    src/mpfile_filesystem.cpp
+    src/write_mpfile.cpp)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
