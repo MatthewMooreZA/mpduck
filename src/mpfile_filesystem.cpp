@@ -402,29 +402,61 @@ static PreDataScan ScanPreDataSection(FileHandle &raw_handle, FileSystem &raw_fs
 	}
 }
 
+//! Returns true if buf[search_from .. n) contains at least one line whose first character is '*'.
+static bool ChunkContainsStarRow(const char *buf, size_t n, size_t search_from) {
+	size_t pos = search_from;
+	while (pos < n) {
+		if (buf[pos] == '*') {
+			return true;
+		}
+		const char *nl = static_cast<const char *>(memchr(buf + pos, '\n', n - pos));
+		if (!nl) {
+			break;
+		}
+		pos = static_cast<size_t>(nl - buf) + 1;
+	}
+	return false;
+}
+
 //! Returns the file offset one past the last '*' row (= start of footer, or file_size).
-//! Reads only the tail of the raw file to avoid loading the entire data block.
+//! Reads the tail in exponentially growing chunks starting at INITIAL_CHUNK to minimise
+//! I/O when the footer is small (the common case).
 static idx_t FindDataEnd(FileHandle &raw_handle, FileSystem &raw_fs, idx_t file_size, idx_t data_start) {
 	if (data_start >= file_size) {
 		return data_start;
 	}
 
-	const idx_t TAIL_SIZE = 65536;
-	idx_t tail_offset = (file_size > TAIL_SIZE) ? (file_size - TAIL_SIZE) : 0;
-	if (tail_offset < data_start) {
-		tail_offset = data_start;
+	const idx_t INITIAL_CHUNK = 4096;
+	const idx_t MAX_CHUNK = 1048576;
+
+	idx_t chunk_size = INITIAL_CHUNK;
+
+	while (true) {
+		idx_t chunk_offset = (file_size > chunk_size) ? (file_size - chunk_size) : 0;
+		if (chunk_offset < data_start) {
+			chunk_offset = data_start;
+		}
+		idx_t chunk_len = file_size - chunk_offset;
+
+		// Allocate without zero-initialising: every byte is overwritten by the Read call below.
+		auto buf = unique_ptr<char[]>(new char[chunk_len]);
+		raw_fs.Read(raw_handle, buf.get(), static_cast<int64_t>(chunk_len), chunk_offset);
+
+		size_t rel_data_start = static_cast<size_t>(data_start - chunk_offset);
+
+		if (ChunkContainsStarRow(buf.get(), static_cast<size_t>(chunk_len), rel_data_start)) {
+			size_t rel_end = FindDataBlockEnd(buf.get(), static_cast<size_t>(chunk_len), rel_data_start);
+			return chunk_offset + static_cast<idx_t>(rel_end);
+		}
+
+		// Entire window is footer — if we have reached data_start there are no '*' rows at all.
+		if (chunk_offset == data_start) {
+			return data_start;
+		}
+
+		// Double chunk size (capped) and retry.
+		chunk_size = (chunk_size <= MAX_CHUNK / 2) ? (chunk_size * 2) : MAX_CHUNK;
 	}
-	idx_t tail_len = file_size - tail_offset;
-
-	// Allocate without zero-initialising: 'new char[n]' default-initialises (indeterminate)
-	// whereas 'new char[n]()' or vector/string constructors would zero-fill needlessly.
-	// Every byte is overwritten by the Read call immediately below.
-	auto tail = unique_ptr<char[]>(new char[tail_len]);
-	raw_fs.Read(raw_handle, tail.get(), static_cast<int64_t>(tail_len), tail_offset);
-
-	size_t rel_data_start = (data_start >= tail_offset) ? (data_start - tail_offset) : 0;
-	size_t rel_data_end = FindDataBlockEnd(tail.get(), tail_len, rel_data_start);
-	return tail_offset + rel_data_end;
 }
 
 //! Copies len bytes of the filtered stream starting at from into dst.
