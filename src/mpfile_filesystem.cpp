@@ -455,7 +455,12 @@ unique_ptr<FileHandle> MPFileSystem::OpenFile(const string &path, FileOpenFlags 
 	unique_ptr<FileSystem> owned_fs;
 	FileSystem *raw_fs;
 	if (db) {
-		raw_fs = &db->GetFileSystem();
+		// Use the raw VirtualFileSystem directly rather than db->GetFileSystem()
+		// (which returns DatabaseFileSystem, an OpenerFileSystem that injects
+		// DatabaseFileOpener and rejects explicit openers via VerifyNoOpener).
+		// We need to pass the original opener so that sub-systems like httpfs
+		// receive the ClientContextFileOpener with its S3 credentials.
+		raw_fs = DBConfig::GetConfig(*db).file_system.get();
 	} else {
 		owned_fs = FileSystem::CreateLocal();
 		raw_fs = owned_fs.get();
@@ -464,13 +469,7 @@ unique_ptr<FileHandle> MPFileSystem::OpenFile(const string &path, FileOpenFlags 
 	unique_ptr<FileHandle> raw_handle;
 	{
 		ScopedMPFSBypass bypass;
-		// When raw_fs is the database's OpenerFileSystem the opener is injected
-		// automatically, so we must not pass it explicitly.
-		if (db) {
-			raw_handle = raw_fs->OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
-		} else {
-			raw_handle = raw_fs->OpenFile(path, FileOpenFlags::FILE_FLAGS_READ, opener);
-		}
+		raw_handle = raw_fs->OpenFile(path, FileOpenFlags::FILE_FLAGS_READ, opener);
 	}
 
 	idx_t file_size = static_cast<idx_t>(raw_fs->GetFileSize(*raw_handle));
@@ -528,11 +527,23 @@ vector<OpenFileInfo> MPFileSystem::Glob(const string &path, FileOpener *opener) 
 	if (path.find_first_of("*?[") == string::npos) {
 		return {OpenFileInfo(path)};
 	}
+	auto db = FileOpener::TryGetDatabase(opener);
+	if (db) {
+		// Delegate to the underlying VirtualFileSystem with bypass active so
+		// MPFileSystem does not intercept its own Glob call.
+		ScopedMPFSBypass bypass;
+		return DBConfig::GetConfig(*db).file_system->Glob(path, opener);
+	}
 	auto local_fs = FileSystem::CreateLocal();
 	return local_fs->Glob(path, opener);
 }
 
 bool MPFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
+	auto db = FileOpener::TryGetDatabase(opener);
+	if (db) {
+		ScopedMPFSBypass bypass;
+		return DBConfig::GetConfig(*db).file_system->FileExists(filename, opener);
+	}
 	auto local_fs = FileSystem::CreateLocal();
 	return local_fs->FileExists(filename, opener);
 }
