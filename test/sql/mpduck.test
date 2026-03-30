@@ -333,6 +333,29 @@ SELECT NAME, AGE FROM read_mpfile('__TEST_DIR__/write_meta_comma.rpt');
 ----
 Bob	25
 
+# write_mpfile: INCLUDE_TYPES=true (explicit) still writes VARIABLE_TYPES row; data round-trips cleanly
+statement ok
+COPY (
+  SELECT 'Dave' AS NAME, CAST(35 AS SMALLINT) AS AGE
+) TO '__TEST_DIR__/write_include_types_true.rpt' (FORMAT mpfile, INCLUDE_TYPES true);
+
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('__TEST_DIR__/write_include_types_true.rpt');
+----
+Dave	35
+
+# write_mpfile: INCLUDE_TYPES=false omits the VARIABLE_TYPES row; header and data rows still present
+statement ok
+COPY (
+  SELECT 'Eve' AS NAME, CAST(28 AS SMALLINT) AS AGE
+) TO '__TEST_DIR__/write_include_types_false.rpt' (FORMAT mpfile, INCLUDE_TYPES false);
+
+# Confirm the file content starts with the header row (no VARIABLE_TYPES line)
+query I
+SELECT starts_with(content, '!') FROM read_text('__TEST_DIR__/write_include_types_false.rpt');
+----
+1
+
 # write_mpfile: KV_METADATA is optional — omitting it still produces a valid file
 statement ok
 COPY (

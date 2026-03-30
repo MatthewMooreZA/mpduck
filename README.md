@@ -53,6 +53,16 @@ COPY (SELECT * FROM my_table) TO 'output.rpt' (
 );
 ```
 
+### INCLUDE_TYPES
+
+Controls whether the `VARIABLE_TYPES` schema row is written. Defaults to `true`.
+
+Set to `false` to omit the `VARIABLE_TYPES` row — useful when the consuming application does not expect it:
+
+```sql
+COPY (SELECT * FROM my_table) TO 'output.rpt' (INCLUDE_TYPES false);
+```
+
 ## Building from source
 
 ```bash

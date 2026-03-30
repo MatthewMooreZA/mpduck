@@ -53,6 +53,7 @@ struct WriteMPFileData : FunctionData {
 	vector<LogicalType> column_types;
 	vector<string> mp_type_codes;             //! one per data column: T, S, N, or I
 	vector<pair<string, string>> metadata_kv; //! from KV_METADATA option
+	bool include_types = true;                //! from INCLUDE_TYPES option (default true)
 
 	bool IsStringCol(idx_t i) const {
 		return mp_type_codes[i] == "T";
@@ -64,6 +65,7 @@ struct WriteMPFileData : FunctionData {
 		copy->column_types = column_types;
 		copy->mp_type_codes = mp_type_codes;
 		copy->metadata_kv = metadata_kv;
+		copy->include_types = include_types;
 		return std::move(copy);
 	}
 
@@ -100,6 +102,12 @@ static unique_ptr<FunctionData> WriteMPFileBind(ClientContext &context, CopyFunc
 				string key = StructType::GetChildName(kv_struct.type(), i);
 				data->metadata_kv.emplace_back(key, values[i].ToString());
 			}
+		} else if (loption == "include_types") {
+			auto &val = option.second[0];
+			if (val.type().id() != LogicalTypeId::BOOLEAN) {
+				throw BinderException("INCLUDE_TYPES must be a boolean (true or false)");
+			}
+			data->include_types = BooleanValue::Get(val);
 		} else {
 			throw NotImplementedException("Unrecognised mpfile COPY option: %s", option.first);
 		}
@@ -141,7 +149,11 @@ static unique_ptr<GlobalFunctionData> WriteMPFileInitGlobal(ClientContext &conte
 		metadata_rows += "\r\n";
 	}
 
-	string preamble = metadata_rows + vt_row + header_row;
+	string preamble = metadata_rows;
+	if (data.include_types) {
+		preamble += vt_row;
+	}
+	preamble += header_row;
 	gstate->handle->Write((void *)preamble.data(), (int64_t)preamble.size());
 
 	return std::move(gstate);
@@ -201,6 +213,7 @@ static void WriteMPFileFinalize(ClientContext & /*context*/, FunctionData & /*bi
 
 static void WriteMPFileCopyOptions(ClientContext & /*context*/, CopyOptionsInput &input) {
 	input.options["kv_metadata"] = CopyOption(LogicalType::ANY, CopyOptionMode::WRITE_ONLY);
+	input.options["include_types"] = CopyOption(LogicalType::BOOLEAN, CopyOptionMode::WRITE_ONLY);
 }
 
 void RegisterWriteMPFile(ExtensionLoader &loader) {
