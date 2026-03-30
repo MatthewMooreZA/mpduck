@@ -311,6 +311,39 @@ SELECT NAME, AGE FROM read_mpfile('__TEST_DIR__/autodetect.fac');
 ----
 Carol	40
 
+# write_mpfile: KV_METADATA writes metadata rows before VARIABLE_TYPES; data round-trips cleanly
+statement ok
+COPY (
+  SELECT 'Alice' AS NAME, CAST(30 AS SMALLINT) AS AGE
+) TO '__TEST_DIR__/write_meta.rpt' (FORMAT mpfile, KV_METADATA {answer: '42', note: 'hello world'});
+
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('__TEST_DIR__/write_meta.rpt');
+----
+Alice	30
+
+# write_mpfile: KV_METADATA with values containing commas round-trips cleanly
+statement ok
+COPY (
+  SELECT 'Bob' AS NAME, CAST(25 AS SMALLINT) AS AGE
+) TO '__TEST_DIR__/write_meta_comma.rpt' (FORMAT mpfile, KV_METADATA {label: 'one,two,three'});
+
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('__TEST_DIR__/write_meta_comma.rpt');
+----
+Bob	25
+
+# write_mpfile: KV_METADATA is optional — omitting it still produces a valid file
+statement ok
+COPY (
+  SELECT 'Carol' AS NAME, CAST(40 AS SMALLINT) AS AGE
+) TO '__TEST_DIR__/write_no_meta.rpt' (FORMAT mpfile);
+
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('__TEST_DIR__/write_no_meta.rpt');
+----
+Carol	40
+
 # read_mpfile: .fac file is parsed as an mpfile
 query TIRTI rowsort
 SELECT NAME, AGE, SCORE, CODE, COUNT FROM read_mpfile('test/data/schema.fac');

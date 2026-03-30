@@ -3,7 +3,10 @@
 
 #include "duckdb/common/file_open_flags.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
+#include "duckdb/common/types/value.hpp"
 #include "duckdb/function/copy_function.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 
@@ -48,7 +51,8 @@ static string QuoteMPString(const string &val) {
 struct WriteMPFileData : FunctionData {
 	vector<string> column_names;
 	vector<LogicalType> column_types;
-	vector<string> mp_type_codes; //! one per data column: T, S, N, or I
+	vector<string> mp_type_codes;             //! one per data column: T, S, N, or I
+	vector<pair<string, string>> metadata_kv; //! from KV_METADATA option
 
 	bool IsStringCol(idx_t i) const {
 		return mp_type_codes[i] == "T";
@@ -59,6 +63,7 @@ struct WriteMPFileData : FunctionData {
 		copy->column_names = column_names;
 		copy->column_types = column_types;
 		copy->mp_type_codes = mp_type_codes;
+		copy->metadata_kv = metadata_kv;
 		return std::move(copy);
 	}
 
@@ -82,6 +87,24 @@ static unique_ptr<FunctionData> WriteMPFileBind(ClientContext &context, CopyFunc
 	for (const auto &type : sql_types) {
 		data->mp_type_codes.push_back(DuckTypeToMPCode(type));
 	}
+
+	for (auto &option : input.info.options) {
+		auto loption = StringUtil::Lower(option.first);
+		if (loption == "kv_metadata") {
+			auto &kv_struct = option.second[0];
+			if (kv_struct.type().id() != LogicalTypeId::STRUCT) {
+				throw BinderException("KV_METADATA must be a struct, e.g. {key: 'value'}");
+			}
+			auto &values = StructValue::GetChildren(kv_struct);
+			for (idx_t i = 0; i < values.size(); i++) {
+				string key = StructType::GetChildName(kv_struct.type(), i);
+				data->metadata_kv.emplace_back(key, values[i].ToString());
+			}
+		} else {
+			throw NotImplementedException("Unrecognised mpfile COPY option: %s", option.first);
+		}
+	}
+
 	return std::move(data);
 }
 
@@ -110,7 +133,15 @@ static unique_ptr<GlobalFunctionData> WriteMPFileInitGlobal(ClientContext &conte
 	}
 	header_row += "\r\n";
 
-	string preamble = vt_row + header_row;
+	string metadata_rows;
+	for (const auto &kv : data.metadata_kv) {
+		metadata_rows += kv.first;
+		metadata_rows += ',';
+		metadata_rows += kv.second;
+		metadata_rows += "\r\n";
+	}
+
+	string preamble = metadata_rows + vt_row + header_row;
 	gstate->handle->Write((void *)preamble.data(), (int64_t)preamble.size());
 
 	return std::move(gstate);
@@ -168,6 +199,10 @@ static void WriteMPFileFinalize(ClientContext & /*context*/, FunctionData & /*bi
 	// FileHandle destructor closes the file.
 }
 
+static void WriteMPFileCopyOptions(ClientContext & /*context*/, CopyOptionsInput &input) {
+	input.options["kv_metadata"] = CopyOption(LogicalType::ANY, CopyOptionMode::WRITE_ONLY);
+}
+
 void RegisterWriteMPFile(ExtensionLoader &loader) {
 	CopyFunction copy_func("mpfile");
 	copy_func.extension = "rpt";
@@ -177,6 +212,7 @@ void RegisterWriteMPFile(ExtensionLoader &loader) {
 	copy_func.copy_to_sink = WriteMPFileSink;
 	copy_func.copy_to_combine = WriteMPFileCombine;
 	copy_func.copy_to_finalize = WriteMPFileFinalize;
+	copy_func.copy_options = WriteMPFileCopyOptions;
 	loader.RegisterFunction(copy_func);
 
 	// Register extension aliases so FORMAT is optional when writing to .rpt or .prn files.
@@ -189,6 +225,7 @@ void RegisterWriteMPFile(ExtensionLoader &loader) {
 		alias.copy_to_sink = WriteMPFileSink;
 		alias.copy_to_combine = WriteMPFileCombine;
 		alias.copy_to_finalize = WriteMPFileFinalize;
+		alias.copy_options = WriteMPFileCopyOptions;
 		loader.RegisterFunction(std::move(alias));
 	}
 }
