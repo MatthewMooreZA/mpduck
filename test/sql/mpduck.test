@@ -300,6 +300,24 @@ SELECT NAME, AGE FROM read_mpfile('__TEST_DIR__/autodetect.prn');
 ----
 Bob	25
 
+# write_mpfile: FORMAT is optional — .fac extension is auto-detected
+statement ok
+COPY (
+  SELECT 'Carol' AS NAME, CAST(40 AS SMALLINT) AS AGE
+) TO '__TEST_DIR__/autodetect.fac';
+
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('__TEST_DIR__/autodetect.fac');
+----
+Carol	40
+
+# read_mpfile: .fac file is parsed as an mpfile
+query TIRTI rowsort
+SELECT NAME, AGE, SCORE, CODE, COUNT FROM read_mpfile('test/data/schema.fac');
+----
+Alice	30	98.5	ABC123	7
+Bob	25	72.0	XYZ999	3
+
 # well-formed mpfile with CRLF line endings (standard case)
 query TIR rowsort
 SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/crlf.rpt');

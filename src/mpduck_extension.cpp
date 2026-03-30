@@ -97,7 +97,7 @@ static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableF
 static unique_ptr<TableRef> ReadMPFileReplacement(ClientContext &context, ReplacementScanInput &input,
                                                   optional_ptr<ReplacementScanData> data) {
 	auto table_name = ReplacementScan::GetFullPath(input);
-	if (!ReplacementScan::CanReplace(table_name, {"rpt", "prn"})) {
+	if (!ReplacementScan::CanReplace(table_name, {"rpt", "prn", "fac"})) {
 		return nullptr;
 	}
 

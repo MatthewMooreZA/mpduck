@@ -251,7 +251,8 @@ bool MPFileSystem::CanHandleFile(const string &path) {
 		return false;
 	}
 	auto lower = StringUtil::Lower(path);
-	return StringUtil::EndsWith(lower, ".rpt") || StringUtil::EndsWith(lower, ".prn");
+	return StringUtil::EndsWith(lower, ".rpt") || StringUtil::EndsWith(lower, ".prn") ||
+	       StringUtil::EndsWith(lower, ".fac");
 }
 
 //! Returns the byte offset of the first character of the line that contains pos.

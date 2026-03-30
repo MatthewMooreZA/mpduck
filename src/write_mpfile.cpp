@@ -181,7 +181,7 @@ void RegisterWriteMPFile(ExtensionLoader &loader) {
 
 	// Register extension aliases so FORMAT is optional when writing to .rpt or .prn files.
 	// DuckDB's auto-detection extracts the file extension and looks it up as a format name.
-	for (auto &ext : {"rpt", "prn"}) {
+	for (auto &ext : {"rpt", "prn", "fac"}) {
 		CopyFunction alias(ext);
 		alias.copy_to_bind = WriteMPFileBind;
 		alias.copy_to_initialize_local = WriteMPFileInitLocal;

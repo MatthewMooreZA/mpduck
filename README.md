@@ -1,6 +1,6 @@
 # mpduck
 
-A DuckDB extension for reading and writing FIS Prophet model point files (`.rpt`, `.prn`).
+A DuckDB extension for reading and writing FIS Prophet model point files (`.rpt`, `.prn`, `.fac`).
 
 ## Installation
 
@@ -11,11 +11,12 @@ LOAD mpduck;
 
 ## Reading files
 
-Reference a `.rpt` or `.prn` file directly in a `FROM` clause:
+Reference a `.rpt`, `.prn`, or `.fac` file directly in a `FROM` clause:
 
 ```sql
 SELECT * FROM 'model_points.rpt';
 SELECT * FROM 'data/*.rpt';
+SELECT * FROM 'data/*.fac';
 ```
 
 Or use `read_mpfile()` explicitly:
@@ -33,9 +34,10 @@ SELECT * FROM read_mpfile(['region_a*.rpt', 'region_b*.rpt']);
 ## Writing files
 
 ```sql
--- The format is auto-detected from the .rpt or .prn extension
+-- The format is auto-detected from the .rpt, .prn, or .fac extension
 COPY (SELECT * FROM my_table) TO 'output.rpt';
 COPY (SELECT * FROM my_table) TO 'output.prn';
+COPY (SELECT * FROM my_table) TO 'output.fac';
 
 -- FORMAT mpfile can also be specified explicitly
 COPY (SELECT * FROM my_table) TO 'output.rpt' (FORMAT mpfile);
