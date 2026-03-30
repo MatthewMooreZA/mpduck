@@ -277,3 +277,43 @@ CODE	VARCHAR
 COUNT	INTEGER
 NAME	VARCHAR
 SCORE	DOUBLE
+
+# well-formed mpfile with CRLF line endings (standard case)
+query TIR rowsort
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/crlf.rpt');
+----
+Alice	30	98.5
+Bob	25	72.0
+
+# CRLF: schema types are correctly inferred from VARIABLE_TYPES row
+query II rowsort
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/crlf.rpt'))
+ORDER BY column_name;
+----
+AGE	SMALLINT
+NAME	VARCHAR
+SCORE	DOUBLE
+
+# large file with CRLF endings (>1 MB data section) — exercises the FindDataEnd fix
+query I
+SELECT COUNT(*) FROM read_mpfile('test/data/large_crlf.rpt');
+----
+56000
+
+# pure LF line endings: backward-compatible with non-standard files
+query TIR rowsort
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/lf.rpt');
+----
+Alice	30	98.5
+Bob	25	72.0
+
+# pure LF: schema types still inferred correctly
+query II rowsort
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/lf.rpt'))
+ORDER BY column_name;
+----
+AGE	SMALLINT
+NAME	VARCHAR
+SCORE	DOUBLE

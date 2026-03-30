@@ -309,6 +309,7 @@ static size_t FindDataBlockEnd(const char *data, size_t n, size_t data_start) {
 struct PreDataScan {
 	string header;    //! normalised '!' rows ready for CSV consumption
 	idx_t data_start; //! absolute file offset of the first '*' row
+	bool uses_crlf;   //! true if the source file uses \r\n line endings
 };
 
 //! Reads the pre-data section of raw_handle sequentially, building the normalised
@@ -321,6 +322,7 @@ static PreDataScan ScanPreDataSection(FileHandle &raw_handle, FileSystem &raw_fs
 
 	PreDataScan result;
 	result.data_start = 0;
+	result.uses_crlf = true; // well-formed mpfiles use CRLF; overridden for pure-LF files
 
 	string pending;       // incomplete line spanning a chunk boundary
 	idx_t file_pos = 0;   // absolute offset of the first byte of the current chunk
@@ -373,8 +375,12 @@ static PreDataScan ScanPreDataSection(FileHandle &raw_handle, FileSystem &raw_fs
 				line_len = assembled.size();
 				pending.clear();
 			}
+			// Strip a trailing \r if present; a line without \r means the file uses
+			// pure LF endings rather than the standard Windows CRLF.
 			if (line_len > 0 && line_data[line_len - 1] == '\r') {
 				line_len--;
+			} else {
+				result.uses_crlf = false;
 			}
 
 			// Process the line.
@@ -390,7 +396,9 @@ static PreDataScan ScanPreDataSection(FileHandle &raw_handle, FileSystem &raw_fs
 						idx_t comma_idx = static_cast<idx_t>(comma - line_data);
 						result.header += '!';
 						result.header.append(line_data + comma_idx, line_len - comma_idx);
-						result.header += '\n';
+						// Use the same line ending as the data rows so the CSV sniffer
+						// sees a consistent stream (all LF or all CRLF).
+						result.header += (result.uses_crlf ? "\r\n" : "\n");
 					}
 				}
 			}
@@ -442,7 +450,11 @@ static idx_t FindDataEnd(FileHandle &raw_handle, FileSystem &raw_fs, idx_t file_
 		auto buf = unique_ptr<char[]>(new char[chunk_len]);
 		raw_fs.Read(raw_handle, buf.get(), static_cast<int64_t>(chunk_len), chunk_offset);
 
-		size_t rel_data_start = static_cast<size_t>(data_start - chunk_offset);
+		// chunk_offset >= data_start is invariant (enforced by the clamp above), so
+		// data_start always falls at or before the start of the buffer.  Search from 0.
+		// (Computing data_start - chunk_offset when chunk_offset > data_start would
+		// silently underflow the unsigned arithmetic and skip all '*' detection.)
+		size_t rel_data_start = 0;
 
 		if (ChunkContainsStarRow(buf.get(), static_cast<size_t>(chunk_len), rel_data_start)) {
 			size_t rel_end = FindDataBlockEnd(buf.get(), static_cast<size_t>(chunk_len), rel_data_start);
@@ -454,8 +466,10 @@ static idx_t FindDataEnd(FileHandle &raw_handle, FileSystem &raw_fs, idx_t file_
 			return data_start;
 		}
 
-		// Double chunk size (capped) and retry.
-		chunk_size = (chunk_size <= MAX_CHUNK / 2) ? (chunk_size * 2) : MAX_CHUNK;
+		// Double chunk size, capped at the full data section so chunk_offset eventually
+		// reaches data_start and the loop is guaranteed to terminate regardless of file size.
+		idx_t max_chunk = file_size - data_start;
+		chunk_size = (chunk_size <= max_chunk / 2) ? (chunk_size * 2) : max_chunk;
 	}
 }
 

@@ -99,7 +99,7 @@ static unique_ptr<GlobalFunctionData> WriteMPFileInitGlobal(ClientContext &conte
 		vt_row += ',';
 		vt_row += code;
 	}
-	vt_row += '\n';
+	vt_row += "\r\n";
 
 	// Header (!) row: unquoted column names (SplitFields in the reader does not
 	// do CSV unquoting, so quoting here would embed the quotes in the name).
@@ -108,7 +108,7 @@ static unique_ptr<GlobalFunctionData> WriteMPFileInitGlobal(ClientContext &conte
 		header_row += ',';
 		header_row += name;
 	}
-	header_row += '\n';
+	header_row += "\r\n";
 
 	string preamble = vt_row + header_row;
 	gstate->handle->Write((void *)preamble.data(), (int64_t)preamble.size());
@@ -146,7 +146,7 @@ static void WriteMPFileSink(ExecutionContext &context, FunctionData &bind_data, 
 				}
 			}
 		}
-		output += '\n';
+		output += "\r\n";
 	}
 
 	lock_guard<mutex> lock(state.write_lock);
