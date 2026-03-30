@@ -33,6 +33,11 @@ SELECT * FROM read_mpfile(['region_a*.rpt', 'region_b*.rpt']);
 ## Writing files
 
 ```sql
+-- The format is auto-detected from the .rpt or .prn extension
+COPY (SELECT * FROM my_table) TO 'output.rpt';
+COPY (SELECT * FROM my_table) TO 'output.prn';
+
+-- FORMAT mpfile can also be specified explicitly
 COPY (SELECT * FROM my_table) TO 'output.rpt' (FORMAT mpfile);
 ```
 

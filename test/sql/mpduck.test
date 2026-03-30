@@ -278,6 +278,28 @@ COUNT	INTEGER
 NAME	VARCHAR
 SCORE	DOUBLE
 
+# write_mpfile: FORMAT is optional — .rpt extension is auto-detected
+statement ok
+COPY (
+  SELECT 'Alice' AS NAME, CAST(30 AS SMALLINT) AS AGE
+) TO '__TEST_DIR__/autodetect.rpt';
+
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('__TEST_DIR__/autodetect.rpt');
+----
+Alice	30
+
+# write_mpfile: FORMAT is optional — .prn extension is auto-detected
+statement ok
+COPY (
+  SELECT 'Bob' AS NAME, CAST(25 AS SMALLINT) AS AGE
+) TO '__TEST_DIR__/autodetect.prn';
+
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('__TEST_DIR__/autodetect.prn');
+----
+Bob	25
+
 # well-formed mpfile with CRLF line endings (standard case)
 query TIR rowsort
 SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/crlf.rpt');

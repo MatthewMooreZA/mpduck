@@ -177,7 +177,20 @@ void RegisterWriteMPFile(ExtensionLoader &loader) {
 	copy_func.copy_to_sink = WriteMPFileSink;
 	copy_func.copy_to_combine = WriteMPFileCombine;
 	copy_func.copy_to_finalize = WriteMPFileFinalize;
-	loader.RegisterFunction(std::move(copy_func));
+	loader.RegisterFunction(copy_func);
+
+	// Register extension aliases so FORMAT is optional when writing to .rpt or .prn files.
+	// DuckDB's auto-detection extracts the file extension and looks it up as a format name.
+	for (auto &ext : {"rpt", "prn"}) {
+		CopyFunction alias(ext);
+		alias.copy_to_bind = WriteMPFileBind;
+		alias.copy_to_initialize_local = WriteMPFileInitLocal;
+		alias.copy_to_initialize_global = WriteMPFileInitGlobal;
+		alias.copy_to_sink = WriteMPFileSink;
+		alias.copy_to_combine = WriteMPFileCombine;
+		alias.copy_to_finalize = WriteMPFileFinalize;
+		loader.RegisterFunction(std::move(alias));
+	}
 }
 
 } // namespace duckdb
