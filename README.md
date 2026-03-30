@@ -43,6 +43,16 @@ COPY (SELECT * FROM my_table) TO 'output.fac';
 COPY (SELECT * FROM my_table) TO 'output.rpt' (FORMAT mpfile);
 ```
 
+### KV_METADATA
+
+Use `KV_METADATA` to embed key-value metadata rows at the top of the file (before the schema row). The value is a struct of string key-value pairs:
+
+```sql
+COPY (SELECT * FROM my_table) TO 'output.rpt' (
+    KV_METADATA {run_date: '2024-01-01', version: '1.0'}
+);
+```
+
 ## Building from source
 
 ```bash
