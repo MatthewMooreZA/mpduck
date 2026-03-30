@@ -68,6 +68,8 @@ public:
 	// over other sub-systems (e.g. httpfs) regardless of extension load order.
 	bool IsManuallySet() override;
 
+	void MoveFile(const string &source, const string &target, optional_ptr<FileOpener> opener = nullptr) override;
+
 	vector<OpenFileInfo> Glob(const string &path, FileOpener *opener = nullptr) override;
 	bool FileExists(const string &filename, optional_ptr<FileOpener> opener = nullptr) override;
 };

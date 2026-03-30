@@ -592,6 +592,17 @@ vector<OpenFileInfo> MPFileSystem::Glob(const string &path, FileOpener *opener) 
 	return local_fs->Glob(path, opener);
 }
 
+void MPFileSystem::MoveFile(const string &source, const string &target, optional_ptr<FileOpener> opener) {
+	auto db = FileOpener::TryGetDatabase(opener);
+	if (db) {
+		ScopedMPFSBypass bypass;
+		DBConfig::GetConfig(*db).file_system->MoveFile(source, target, opener);
+		return;
+	}
+	auto local_fs = FileSystem::CreateLocal();
+	local_fs->MoveFile(source, target, opener);
+}
+
 bool MPFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
 	auto db = FileOpener::TryGetDatabase(opener);
 	if (db) {
