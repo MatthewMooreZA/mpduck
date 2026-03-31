@@ -70,6 +70,8 @@ public:
 
 	void MoveFile(const string &source, const string &target, optional_ptr<FileOpener> opener = nullptr) override;
 
+	timestamp_t GetLastModifiedTime(FileHandle &handle) override;
+
 	vector<OpenFileInfo> Glob(const string &path, FileOpener *opener = nullptr) override;
 	bool FileExists(const string &filename, optional_ptr<FileOpener> opener = nullptr) override;
 };

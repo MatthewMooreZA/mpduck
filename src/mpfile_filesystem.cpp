@@ -603,6 +603,11 @@ void MPFileSystem::MoveFile(const string &source, const string &target, optional
 	local_fs->MoveFile(source, target, opener);
 }
 
+timestamp_t MPFileSystem::GetLastModifiedTime(FileHandle &handle) {
+	auto &mp_handle = handle.Cast<MPFileHandle>();
+	return mp_handle.raw_fs->GetLastModifiedTime(*mp_handle.raw_handle);
+}
+
 bool MPFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> opener) {
 	auto db = FileOpener::TryGetDatabase(opener);
 	if (db) {
