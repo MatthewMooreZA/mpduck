@@ -58,21 +58,6 @@ struct WriteMPFileData : FunctionData {
 		return mp_type_codes[i] == "T";
 	}
 
-	unique_ptr<FunctionData> Copy() const override {
-		auto copy = make_uniq<WriteMPFileData>();
-		copy->column_names = column_names;
-		copy->column_types = column_types;
-		copy->mp_type_codes = mp_type_codes;
-		copy->metadata_kv = metadata_kv;
-		copy->include_types = include_types;
-		return std::move(copy);
-	}
-
-	bool Equals(const FunctionData &other) const override {
-		auto &o = other.Cast<WriteMPFileData>();
-		return column_names == o.column_names && column_types == o.column_types;
-	}
-
 	static idx_t EstimateBytesPerRow(const vector<string> &type_codes) {
 		// '*' row marker + "\r\n" + ',' per column
 		idx_t estimate = 3 + type_codes.size();
@@ -84,10 +69,26 @@ struct WriteMPFileData : FunctionData {
 			} else if (code == "I") {
 				estimate += 12; // max int64: sign + 19 digits (typical much shorter)
 			} else {
-				estimate += 20; // N: numeric/decimal/float
+				estimate += 15; // N: std::to_string double gives ~12 chars + headroom
 			}
 		}
 		return estimate;
+	}
+
+	unique_ptr<FunctionData> Copy() const override {
+		auto copy = make_uniq<WriteMPFileData>();
+		copy->column_names = column_names;
+		copy->column_types = column_types;
+		copy->mp_type_codes = mp_type_codes;
+		copy->metadata_kv = metadata_kv;
+		copy->include_types = include_types;
+		copy->bytes_per_row_estimate = bytes_per_row_estimate;
+		return std::move(copy);
+	}
+
+	bool Equals(const FunctionData &other) const override {
+		auto &o = other.Cast<WriteMPFileData>();
+		return column_names == o.column_names && column_types == o.column_types;
 	}
 };
 
@@ -97,7 +98,11 @@ struct WriteMPFileGlobalState : GlobalFunctionData {
 };
 
 struct WriteMPFileLocalState : LocalFunctionData {
-	string buffer; //! reused across chunks on this thread; cleared (not destroyed) between calls
+	string buffer;         //! accumulates formatted rows across chunks
+	idx_t flush_threshold; //! computed from row width: target ~8 chunks per flush, clamped to [1 MB, 64 MB]
+
+	explicit WriteMPFileLocalState(idx_t threshold) : flush_threshold(threshold) {
+	}
 };
 
 static unique_ptr<FunctionData> WriteMPFileBind(ClientContext &context, CopyFunctionBindInput &input,
@@ -194,10 +199,7 @@ static void WriteMPFileSink(ExecutionContext &context, FunctionData &bind_data, 
 		input.data[col].Flatten(nrows);
 	}
 
-	// Reuse the per-thread buffer; reserve on the first call (subsequent calls find it pre-sized).
-	auto &output = lstate.buffer;
-	output.clear();
-	output.reserve(nrows * data.bytes_per_row_estimate);
+	auto &output = lstate.buffer; //! accumulates formatted rows; flushed when threshold is reached
 
 	for (idx_t row = 0; row < nrows; row++) {
 		output += '*';
@@ -304,18 +306,36 @@ static void WriteMPFileSink(ExecutionContext &context, FunctionData &bind_data, 
 		output += "\r\n";
 	}
 
-	lock_guard<mutex> lock(state.write_lock);
-	state.handle->Write((void *)output.data(), (int64_t)output.size());
+	if (output.size() >= lstate.flush_threshold) {
+		lock_guard<mutex> lock(state.write_lock);
+		state.handle->Write((void *)output.data(), (int64_t)output.size());
+		output.clear();
+	}
 }
 
-static unique_ptr<LocalFunctionData> WriteMPFileInitLocal(ExecutionContext & /*context*/,
-                                                          FunctionData & /*bind_data*/) {
-	return make_uniq<WriteMPFileLocalState>();
+static unique_ptr<LocalFunctionData> WriteMPFileInitLocal(ExecutionContext & /*context*/, FunctionData &bind_data) {
+	auto &data = bind_data.Cast<WriteMPFileData>();
+	// Target ~8 chunks per flush so that both narrow and wide files amortise syscall overhead equally.
+	// DuckDB's standard vector size is 2048 rows; clamp to [1 MB, 64 MB] to bound memory per thread.
+	static constexpr idx_t CHUNK_ROWS = 2048;
+	static constexpr idx_t TARGET_CHUNKS = 8;
+	static constexpr idx_t MIN_THRESHOLD = 1 * 1024 * 1024;
+	static constexpr idx_t MAX_THRESHOLD = 64 * 1024 * 1024;
+	idx_t threshold = CHUNK_ROWS * data.bytes_per_row_estimate * TARGET_CHUNKS;
+	threshold = MaxValue(threshold, MIN_THRESHOLD);
+	threshold = MinValue(threshold, MAX_THRESHOLD);
+	return make_uniq<WriteMPFileLocalState>(threshold);
 }
 
 static void WriteMPFileCombine(ExecutionContext & /*context*/, FunctionData & /*bind_data*/,
-                               GlobalFunctionData & /*gstate*/, LocalFunctionData & /*lstate*/) {
-	// All writes go directly to the global handle under its mutex; nothing to combine.
+                               GlobalFunctionData &gstate_ref, LocalFunctionData &lstate_ref) {
+	auto &state = gstate_ref.Cast<WriteMPFileGlobalState>();
+	auto &lstate = lstate_ref.Cast<WriteMPFileLocalState>();
+	if (!lstate.buffer.empty()) {
+		lock_guard<mutex> lock(state.write_lock);
+		state.handle->Write((void *)lstate.buffer.data(), (int64_t)lstate.buffer.size());
+		lstate.buffer.clear();
+	}
 }
 
 static void WriteMPFileFinalize(ClientContext & /*context*/, FunctionData & /*bind_data*/,
