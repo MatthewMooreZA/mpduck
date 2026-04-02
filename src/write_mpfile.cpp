@@ -5,8 +5,10 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types.hpp"
+#include "duckdb/common/types/cast_helpers.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/types/vector.hpp"
 #include "duckdb/function/copy_function.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 
@@ -32,20 +34,16 @@ static string DuckTypeToMPCode(const LogicalType &type) {
 	}
 }
 
-//! Wrap val in double-quotes, escaping any embedded double-quotes by doubling them.
-static string QuoteMPString(const string &val) {
-	string result;
-	result.reserve(val.size() + 2);
-	result += '"';
-	for (char c : val) {
-		if (c == '"') {
-			result += "\"\"";
-		} else {
-			result += c;
+//! Append val wrapped in double-quotes (escaping embedded double-quotes by doubling) directly into out.
+static void AppendQuotedMPString(const char *data, size_t len, string &out) {
+	out += '"';
+	for (size_t i = 0; i < len; ++i) {
+		if (data[i] == '"') {
+			out += '"';
 		}
+		out += data[i];
 	}
-	result += '"';
-	return result;
+	out += '"';
 }
 
 struct WriteMPFileData : FunctionData {
@@ -54,6 +52,7 @@ struct WriteMPFileData : FunctionData {
 	vector<string> mp_type_codes;             //! one per data column: T, S, N, or I
 	vector<pair<string, string>> metadata_kv; //! from KV_METADATA option
 	bool include_types = true;                //! from INCLUDE_TYPES option (default true)
+	idx_t bytes_per_row_estimate = 0;         //! pre-computed buffer size hint per row
 
 	bool IsStringCol(idx_t i) const {
 		return mp_type_codes[i] == "T";
@@ -73,11 +72,32 @@ struct WriteMPFileData : FunctionData {
 		auto &o = other.Cast<WriteMPFileData>();
 		return column_names == o.column_names && column_types == o.column_types;
 	}
+
+	static idx_t EstimateBytesPerRow(const vector<string> &type_codes) {
+		// '*' row marker + "\r\n" + ',' per column
+		idx_t estimate = 3 + type_codes.size();
+		for (const auto &code : type_codes) {
+			if (code == "T") {
+				estimate += 22; // avg quoted VARCHAR
+			} else if (code == "S") {
+				estimate += 7; // max int16: sign + 5 digits
+			} else if (code == "I") {
+				estimate += 12; // max int64: sign + 19 digits (typical much shorter)
+			} else {
+				estimate += 20; // N: numeric/decimal/float
+			}
+		}
+		return estimate;
+	}
 };
 
 struct WriteMPFileGlobalState : GlobalFunctionData {
 	unique_ptr<FileHandle> handle;
 	mutex write_lock;
+};
+
+struct WriteMPFileLocalState : LocalFunctionData {
+	string buffer; //! reused across chunks on this thread; cleared (not destroyed) between calls
 };
 
 static unique_ptr<FunctionData> WriteMPFileBind(ClientContext &context, CopyFunctionBindInput &input,
@@ -113,6 +133,7 @@ static unique_ptr<FunctionData> WriteMPFileBind(ClientContext &context, CopyFunc
 		}
 	}
 
+	data->bytes_per_row_estimate = WriteMPFileData::EstimateBytesPerRow(data->mp_type_codes);
 	return std::move(data);
 }
 
@@ -160,33 +181,124 @@ static unique_ptr<GlobalFunctionData> WriteMPFileInitGlobal(ClientContext &conte
 }
 
 static void WriteMPFileSink(ExecutionContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
-                            LocalFunctionData & /*lstate*/, DataChunk &input) {
+                            LocalFunctionData &lstate_ref, DataChunk &input) {
 	auto &data = bind_data.Cast<WriteMPFileData>();
 	auto &state = gstate.Cast<WriteMPFileGlobalState>();
+	auto &lstate = lstate_ref.Cast<WriteMPFileLocalState>();
 
 	idx_t ncols = data.column_names.size();
 	idx_t nrows = input.size();
 
-	string output;
-	output.reserve(nrows * (ncols + 1) * 8);
+	// Flatten all vectors once up front so FlatVector accessors are valid.
+	for (idx_t col = 0; col < ncols; col++) {
+		input.data[col].Flatten(nrows);
+	}
+
+	// Reuse the per-thread buffer; reserve on the first call (subsequent calls find it pre-sized).
+	auto &output = lstate.buffer;
+	output.clear();
+	output.reserve(nrows * data.bytes_per_row_estimate);
 
 	for (idx_t row = 0; row < nrows; row++) {
 		output += '*';
 		for (idx_t col = 0; col < ncols; col++) {
 			output += ',';
-			Value val = input.GetValue(col, row);
-			if (val.IsNull()) {
+			auto &vec = input.data[col];
+			if (!FlatVector::Validity(vec).RowIsValid(row)) {
 				if (data.IsStringCol(col)) {
 					output += "\"\"";
 				}
 				// numeric NULLs produce an empty field
-			} else {
-				string str = val.ToString();
-				if (data.IsStringCol(col)) {
-					output += QuoteMPString(str);
-				} else {
-					output += str;
+				continue;
+			}
+			switch (data.column_types[col].id()) {
+			case LogicalTypeId::VARCHAR: {
+				auto sv = FlatVector::GetData<string_t>(vec)[row];
+				AppendQuotedMPString(sv.GetData(), sv.GetSize(), output);
+				break;
+			}
+			case LogicalTypeId::SMALLINT: {
+				char tmp[8];
+				char *end = tmp + sizeof(tmp);
+				int16_t val = FlatVector::GetData<int16_t>(vec)[row];
+				bool neg = val < 0;
+				uint16_t uval = neg ? (uint16_t(-(val + 1)) + 1) : uint16_t(val);
+				char *start = NumericHelper::FormatUnsigned<uint16_t>(uval, end);
+				if (neg) {
+					*--start = '-';
 				}
+				output.append(start, UnsafeNumericCast<size_t>(end - start));
+				break;
+			}
+			case LogicalTypeId::INTEGER: {
+				char tmp[12];
+				char *end = tmp + sizeof(tmp);
+				int32_t val = FlatVector::GetData<int32_t>(vec)[row];
+				bool neg = val < 0;
+				uint32_t uval = neg ? (uint32_t(-(val + 1)) + 1) : uint32_t(val);
+				char *start = NumericHelper::FormatUnsigned<uint32_t>(uval, end);
+				if (neg) {
+					*--start = '-';
+				}
+				output.append(start, UnsafeNumericCast<size_t>(end - start));
+				break;
+			}
+			case LogicalTypeId::BIGINT: {
+				char tmp[21];
+				char *end = tmp + sizeof(tmp);
+				int64_t val = FlatVector::GetData<int64_t>(vec)[row];
+				bool neg = val < 0;
+				uint64_t uval = neg ? (uint64_t(-(val + 1)) + 1) : uint64_t(val);
+				char *start = NumericHelper::FormatUnsigned<uint64_t>(uval, end);
+				if (neg) {
+					*--start = '-';
+				}
+				output.append(start, UnsafeNumericCast<size_t>(end - start));
+				break;
+			}
+			case LogicalTypeId::FLOAT:
+				output += std::to_string(FlatVector::GetData<float>(vec)[row]);
+				break;
+			case LogicalTypeId::DOUBLE:
+				output += std::to_string(FlatVector::GetData<double>(vec)[row]);
+				break;
+			case LogicalTypeId::DECIMAL: {
+				auto &col_type = data.column_types[col];
+				uint8_t width = DecimalType::GetWidth(col_type);
+				uint8_t scale = DecimalType::GetScale(col_type);
+				char tmp[40];
+				switch (col_type.InternalType()) {
+				case PhysicalType::INT16: {
+					auto v = FlatVector::GetData<int16_t>(vec)[row];
+					idx_t len = UnsafeNumericCast<idx_t>(DecimalToString::DecimalLength<int16_t>(v, width, scale));
+					DecimalToString::FormatDecimal<int16_t>(v, width, scale, tmp, len);
+					output.append(tmp, len);
+					break;
+				}
+				case PhysicalType::INT32: {
+					auto v = FlatVector::GetData<int32_t>(vec)[row];
+					idx_t len = UnsafeNumericCast<idx_t>(DecimalToString::DecimalLength<int32_t>(v, width, scale));
+					DecimalToString::FormatDecimal<int32_t>(v, width, scale, tmp, len);
+					output.append(tmp, len);
+					break;
+				}
+				case PhysicalType::INT64: {
+					auto v = FlatVector::GetData<int64_t>(vec)[row];
+					idx_t len = UnsafeNumericCast<idx_t>(DecimalToString::DecimalLength<int64_t>(v, width, scale));
+					DecimalToString::FormatDecimal<int64_t>(v, width, scale, tmp, len);
+					output.append(tmp, len);
+					break;
+				}
+				default:
+					// hugeint_t decimal — fallback to generic path
+					output += input.GetValue(col, row).ToString();
+				}
+				break;
+			}
+			default:
+				// Fallback for any remaining types — correct but not maximally fast.
+				output += input.GetValue(col, row).ToString();
+				break;
 			}
 		}
 		output += "\r\n";
@@ -198,7 +310,7 @@ static void WriteMPFileSink(ExecutionContext &context, FunctionData &bind_data, 
 
 static unique_ptr<LocalFunctionData> WriteMPFileInitLocal(ExecutionContext & /*context*/,
                                                           FunctionData & /*bind_data*/) {
-	return make_uniq<LocalFunctionData>();
+	return make_uniq<WriteMPFileLocalState>();
 }
 
 static void WriteMPFileCombine(ExecutionContext & /*context*/, FunctionData & /*bind_data*/,
