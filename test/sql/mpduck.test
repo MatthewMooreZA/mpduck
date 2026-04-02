@@ -413,3 +413,35 @@ ORDER BY column_name;
 AGE	SMALLINT
 NAME	VARCHAR
 SCORE	DOUBLE
+
+# Empty-file filtering: zero-byte file in a glob is silently ignored.
+# glob_a*.rpt expands to glob_a.rpt, glob_a2.rpt, and empty.rpt;
+# only the two files with data contribute columns.
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/glob_a*.rpt'))
+ORDER BY column_name;
+----
+AGE	SMALLINT
+CODE	VARCHAR
+DEPT	VARCHAR
+NAME	VARCHAR
+SALARY	DOUBLE
+SCORE	DOUBLE
+
+# Empty-file filtering: file with no '!' column header is silently ignored via list input.
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/no_columns.rpt']);
+----
+Alice
+
+# Empty-file filtering: zero-byte file is silently ignored via list input.
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt']);
+----
+Alice
+
+# Empty-file filtering: list containing only empty/no-column files throws an error.
+statement error
+SELECT * FROM read_mpfile(['test/data/empty.rpt', 'test/data/no_columns.rpt']);
+----

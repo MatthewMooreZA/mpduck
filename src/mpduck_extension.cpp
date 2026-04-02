@@ -72,24 +72,28 @@ static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableF
 	auto path = input.inputs[0].GetValue<string>();
 	auto &fs = FileSystem::GetFileSystem(context);
 
-	MPFileSchema schema;
 	if (FileSystem::HasGlob(path)) {
-		// Expand the glob, parse each file's schema, and merge.
+		// Expand the glob, filter out empty files, parse schemas, and merge.
 		auto files = fs.Glob(path);
+		vector<string> data_paths;
 		vector<MPFileSchema> schemas;
-		schemas.reserve(files.size());
 		for (const auto &info : files) {
-			schemas.push_back(ParseMPFileSchema(info.path, fs));
+			auto s = ParseMPFileSchema(info.path, fs);
+			if (s.column_names.size() >= 2) { // "!" indicator + at least one column
+				data_paths.push_back(info.path);
+				schemas.push_back(std::move(s));
+			}
 		}
-		schema = MergeSchemas(schemas);
-	} else {
-		schema = ParseMPFileSchema(path, fs);
+		if (data_paths.empty()) {
+			throw InvalidInputException("read_mpfile: no files with data matched '%s'", path);
+		}
+		auto schema = MergeSchemas(schemas);
+		return MakeReadCSVRefFromPaths(data_paths, schema);
 	}
 
+	auto schema = ParseMPFileSchema(path, fs);
 	auto table_function = MakeReadCSVRef(path, schema);
-	if (!FileSystem::HasGlob(path)) {
-		table_function->alias = fs.ExtractBaseName(path);
-	}
+	table_function->alias = fs.ExtractBaseName(path);
 	return std::move(table_function);
 }
 
@@ -114,17 +118,26 @@ static unique_ptr<TableRef> ReadMPFileListBindReplace(ClientContext &context, Ta
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto &path_entries = ListValue::GetChildren(input.inputs[0]);
 
-	// Expand globs and collect all concrete file paths.
+	// Expand globs, collect concrete paths, and filter out files with no data.
 	vector<string> all_paths;
+	vector<MPFileSchema> schemas;
 	for (const auto &entry : path_entries) {
 		auto path = entry.GetValue<string>();
 		if (FileSystem::HasGlob(path)) {
 			auto files = fs.Glob(path);
 			for (auto &info : files) {
-				all_paths.push_back(info.path);
+				auto s = ParseMPFileSchema(info.path, fs);
+				if (s.column_names.size() >= 2) { // "!" indicator + at least one column
+					all_paths.push_back(info.path);
+					schemas.push_back(std::move(s));
+				}
 			}
 		} else {
-			all_paths.push_back(path);
+			auto s = ParseMPFileSchema(path, fs);
+			if (s.column_names.size() >= 2) {
+				all_paths.push_back(path);
+				schemas.push_back(std::move(s));
+			}
 		}
 	}
 
@@ -132,12 +145,6 @@ static unique_ptr<TableRef> ReadMPFileListBindReplace(ClientContext &context, Ta
 		throw InvalidInputException("read_mpfile: no files matched the provided paths");
 	}
 
-	// Parse and merge schemas from every resolved file.
-	vector<MPFileSchema> schemas;
-	schemas.reserve(all_paths.size());
-	for (const auto &path : all_paths) {
-		schemas.push_back(ParseMPFileSchema(path, fs));
-	}
 	auto schema = MergeSchemas(schemas);
 
 	// No alias — list input spans multiple files.
