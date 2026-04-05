@@ -5,7 +5,7 @@ A DuckDB extension for reading and writing FIS Prophet model point files (`.rpt`
 ## Installation
 
 ```sql
-INSTALL mpduck;
+INSTALL mpduck FROM community;
 LOAD mpduck;
 ```
 
