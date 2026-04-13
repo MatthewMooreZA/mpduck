@@ -445,3 +445,29 @@ Alice
 statement error
 SELECT * FROM read_mpfile(['test/data/empty.rpt', 'test/data/no_columns.rpt']);
 ----
+
+# filename=true adds a filename column containing the file path for each row
+query TIT
+SELECT NAME, AGE, filename FROM read_mpfile('test/data/glob_a.rpt', filename=true);
+----
+Alice	30	test/data/glob_a.rpt
+
+# filename=true tracks per-file paths when reading a glob
+query TT rowsort
+SELECT NAME, filename FROM read_mpfile('test/data/glob_a*.rpt', filename=true);
+----
+Alice	test/data/glob_a.rpt
+Charlie	test/data/glob_a2.rpt
+
+# filename=true works with the list overload
+query TT rowsort
+SELECT NAME, filename FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt'], filename=true);
+----
+Alice	test/data/glob_a.rpt
+Bob	test/data/glob_b.rpt
+
+# filename accepts a string to specify a custom column name
+query TT
+SELECT NAME, source_file FROM read_mpfile('test/data/glob_a.rpt', filename='source_file');
+----
+Alice	test/data/glob_a.rpt
