@@ -21,7 +21,9 @@ namespace duckdb {
 
 //! Build a read_csv_auto ref for the given list of paths, wrapped in SELECT * EXCLUDE ("!").
 //! When a schema is provided its column types are forwarded via the dtypes parameter.
-static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths, const MPFileSchema &schema) {
+//! When filename_opt is non-null its value is forwarded as the filename= named parameter of read_csv_auto.
+static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths, const MPFileSchema &schema,
+                                                    unique_ptr<Value> filename_opt = nullptr) {
 	vector<unique_ptr<ParsedExpression>> children;
 	vector<Value> path_values;
 	path_values.reserve(paths.size());
@@ -45,6 +47,12 @@ static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths,
 		children.push_back(std::move(dtypes_expr));
 	}
 
+	if (filename_opt) {
+		auto filename_expr = make_uniq<ConstantExpression>(*filename_opt);
+		filename_expr->SetAlias("filename");
+		children.push_back(std::move(filename_expr));
+	}
+
 	auto table_function = make_uniq<TableFunctionRef>();
 	table_function->function = make_uniq<FunctionExpression>("read_csv_auto", std::move(children));
 
@@ -62,8 +70,18 @@ static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths,
 }
 
 //! Build a read_csv_auto ref for a single path (wraps MakeReadCSVRefFromPaths).
-static unique_ptr<TableRef> MakeReadCSVRef(const string &path, const MPFileSchema &schema) {
-	return MakeReadCSVRefFromPaths({path}, schema);
+static unique_ptr<TableRef> MakeReadCSVRef(const string &path, const MPFileSchema &schema,
+                                           unique_ptr<Value> filename_opt = nullptr) {
+	return MakeReadCSVRefFromPaths({path}, schema, std::move(filename_opt));
+}
+
+//! Extract the filename named parameter from input, if present.
+static unique_ptr<Value> ExtractFilenameOpt(TableFunctionBindInput &input) {
+	auto it = input.named_parameters.find("filename");
+	if (it != input.named_parameters.end()) {
+		return make_uniq<Value>(it->second);
+	}
+	return nullptr;
 }
 
 //! Redirect read_mpfile('path') to read_csv_auto('path', union_by_name=true[, dtypes=...]).
@@ -71,6 +89,7 @@ static unique_ptr<TableRef> MakeReadCSVRef(const string &path, const MPFileSchem
 static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableFunctionBindInput &input) {
 	auto path = input.inputs[0].GetValue<string>();
 	auto &fs = FileSystem::GetFileSystem(context);
+	auto filename_opt = ExtractFilenameOpt(input);
 
 	if (FileSystem::HasGlob(path)) {
 		// Expand the glob, filter out empty files, parse schemas, and merge.
@@ -88,11 +107,11 @@ static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableF
 			throw InvalidInputException("read_mpfile: no files with data matched '%s'", path);
 		}
 		auto schema = MergeSchemas(schemas);
-		return MakeReadCSVRefFromPaths(data_paths, schema);
+		return MakeReadCSVRefFromPaths(data_paths, schema, std::move(filename_opt));
 	}
 
 	auto schema = ParseMPFileSchema(path, fs);
-	auto table_function = MakeReadCSVRef(path, schema);
+	auto table_function = MakeReadCSVRef(path, schema, std::move(filename_opt));
 	table_function->alias = fs.ExtractBaseName(path);
 	return std::move(table_function);
 }
@@ -117,6 +136,7 @@ static unique_ptr<TableRef> ReadMPFileReplacement(ClientContext &context, Replac
 static unique_ptr<TableRef> ReadMPFileListBindReplace(ClientContext &context, TableFunctionBindInput &input) {
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto &path_entries = ListValue::GetChildren(input.inputs[0]);
+	auto filename_opt = ExtractFilenameOpt(input);
 
 	// Expand globs, collect concrete paths, and filter out files with no data.
 	vector<string> all_paths;
@@ -148,7 +168,7 @@ static unique_ptr<TableRef> ReadMPFileListBindReplace(ClientContext &context, Ta
 	auto schema = MergeSchemas(schemas);
 
 	// No alias — list input spans multiple files.
-	return MakeReadCSVRefFromPaths(all_paths, schema);
+	return MakeReadCSVRefFromPaths(all_paths, schema, std::move(filename_opt));
 }
 
 static void LoadInternal(ExtensionLoader &loader) {
@@ -160,11 +180,13 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// Explicit table function: SELECT * FROM read_mpfile('file.rpt')
 	TableFunction read_mpfile("read_mpfile", {LogicalType::VARCHAR}, nullptr, nullptr);
 	read_mpfile.bind_replace = ReadMPFileBindReplace;
+	read_mpfile.named_parameters["filename"] = LogicalType::ANY;
 	loader.RegisterFunction(read_mpfile);
 
 	// List overload: SELECT * FROM read_mpfile(['file1.rpt', 'glob_*.rpt', ...])
 	TableFunction read_mpfile_list("read_mpfile", {LogicalType::LIST(LogicalType::VARCHAR)}, nullptr, nullptr);
 	read_mpfile_list.bind_replace = ReadMPFileListBindReplace;
+	read_mpfile_list.named_parameters["filename"] = LogicalType::ANY;
 	loader.RegisterFunction(read_mpfile_list);
 
 	// Implicit scan: SELECT * FROM 'file.rpt'
