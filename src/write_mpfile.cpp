@@ -18,13 +18,14 @@ namespace duckdb {
 
 //! Map a DuckDB column type to the corresponding mpfile VARIABLE_TYPES code.
 //! T = text (VARCHAR and anything else), S = smallint, I = integer, N = numeric.
+//! BIGINT maps to N (read back as DOUBLE, exact to 2^53) because I is a 32-bit INTEGER on read.
 static string DuckTypeToMPCode(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::SMALLINT:
 		return "S";
 	case LogicalTypeId::INTEGER:
-	case LogicalTypeId::BIGINT:
 		return "I";
+	case LogicalTypeId::BIGINT:
 	case LogicalTypeId::FLOAT:
 	case LogicalTypeId::DOUBLE:
 	case LogicalTypeId::DECIMAL:
@@ -69,7 +70,7 @@ struct WriteMPFileData : FunctionData {
 			} else if (code == "I") {
 				estimate += 12; // max int64: sign + 19 digits (typical much shorter)
 			} else {
-				estimate += 15; // N: std::to_string double gives ~12 chars + headroom
+				estimate += 15; // N: shortest round-trip double is up to ~24 chars; typical values are much shorter
 			}
 		}
 		return estimate;
@@ -113,6 +114,15 @@ static unique_ptr<FunctionData> WriteMPFileBind(ClientContext &context, CopyFunc
 	data->mp_type_codes.reserve(sql_types.size());
 	for (const auto &type : sql_types) {
 		data->mp_type_codes.push_back(DuckTypeToMPCode(type));
+	}
+	// The header row is written unquoted and split on commas by the reader, so a name
+	// containing a delimiter, quote or line break would corrupt the file.
+	for (const auto &name : names) {
+		if (name.find_first_of(",\"\r\n") != string::npos) {
+			throw BinderException("Column name '%s' cannot be written to an mpfile: names must not contain commas, "
+			                      "double quotes or line breaks",
+			                      name);
+		}
 	}
 
 	for (auto &option : input.info.options) {
@@ -258,11 +268,13 @@ static void WriteMPFileSink(ExecutionContext &context, FunctionData &bind_data, 
 				output.append(start, UnsafeNumericCast<size_t>(end - start));
 				break;
 			}
+			// Value::ToString gives the shortest round-trip representation;
+			// std::to_string uses %f (6 decimal places) and silently loses small values.
 			case LogicalTypeId::FLOAT:
-				output += std::to_string(FlatVector::GetData<float>(vec)[row]);
+				output += Value::FLOAT(FlatVector::GetData<float>(vec)[row]).ToString();
 				break;
 			case LogicalTypeId::DOUBLE:
-				output += std::to_string(FlatVector::GetData<double>(vec)[row]);
+				output += Value::DOUBLE(FlatVector::GetData<double>(vec)[row]).ToString();
 				break;
 			case LogicalTypeId::DECIMAL: {
 				auto &col_type = data.column_types[col];
@@ -297,10 +309,13 @@ static void WriteMPFileSink(ExecutionContext &context, FunctionData &bind_data, 
 				}
 				break;
 			}
-			default:
-				// Fallback for any remaining types — correct but not maximally fast.
-				output += input.GetValue(col, row).ToString();
+			default: {
+				// Fallback for any remaining types (written as text, so quote them:
+				// lists, structs and timestamps may contain commas or quotes).
+				auto str = input.GetValue(col, row).ToString();
+				AppendQuotedMPString(str.data(), str.size(), output);
 				break;
+			}
 			}
 		}
 		output += "\r\n";
@@ -339,8 +354,13 @@ static void WriteMPFileCombine(ExecutionContext & /*context*/, FunctionData & /*
 }
 
 static void WriteMPFileFinalize(ClientContext & /*context*/, FunctionData & /*bind_data*/,
-                                GlobalFunctionData & /*gstate*/) {
-	// FileHandle destructor closes the file.
+                                GlobalFunctionData &gstate_ref) {
+	// Close explicitly rather than relying on the destructor so write errors surface here.
+	auto &state = gstate_ref.Cast<WriteMPFileGlobalState>();
+	if (state.handle) {
+		state.handle->Close();
+		state.handle.reset();
+	}
 }
 
 static void WriteMPFileCopyOptions(ClientContext & /*context*/, CopyOptionsInput &input) {

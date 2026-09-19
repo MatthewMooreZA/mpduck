@@ -20,6 +20,17 @@ jobs:
       ci_tools_version: v1.5.1
       extension_name: mpduck
 
+  # Early-warning build against DuckDB main so C++ API breakage (e.g. ahead of v2.0)
+  # shows up before release day. Informational only: failures do not block merges.
+  duckdb-next-build:
+    name: Build extension against DuckDB main (informational)
+    continue-on-error: true
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
+    with:
+      duckdb_version: main
+      ci_tools_version: main
+      extension_name: mpduck
+
   code-quality-check:
     name: Code Quality Check
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.5.1

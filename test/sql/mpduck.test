@@ -471,3 +471,59 @@ query TT
 SELECT NAME, parse_filename(source_file) FROM read_mpfile('test/data/glob_a.rpt', filename='source_file');
 ----
 Alice	glob_a.rpt
+
+# write_mpfile: small doubles keep full precision (std::to_string would write 0.000000)
+statement ok
+COPY (
+  SELECT 1e-9::DOUBLE AS TINY, 123456789.123456789::DOUBLE AS BIG
+) TO '__TEST_DIR__/write_double_precision.rpt' (FORMAT mpfile);
+
+query II
+SELECT TINY = 1e-9, BIG = 123456789.123456789 FROM read_mpfile('__TEST_DIR__/write_double_precision.rpt');
+----
+true	true
+
+# write_mpfile: BIGINT values above the INTEGER range survive a round-trip (written as N, read as DOUBLE)
+statement ok
+COPY (
+  SELECT 5000000000::BIGINT AS BIG
+) TO '__TEST_DIR__/write_bigint.rpt' (FORMAT mpfile);
+
+query R
+SELECT BIG FROM read_mpfile('__TEST_DIR__/write_bigint.rpt');
+----
+5000000000.0
+
+# write_mpfile: types without a native mpfile code are written as quoted text
+statement ok
+COPY (
+  SELECT DATE '2024-01-31' AS D, [1, 2, 3] AS L
+) TO '__TEST_DIR__/write_fallback_types.rpt' (FORMAT mpfile);
+
+query TT
+SELECT D, L FROM read_mpfile('__TEST_DIR__/write_fallback_types.rpt');
+----
+2024-01-31	[1, 2, 3]
+
+# write_mpfile: NULLs round-trip as NULL in numeric and text columns
+statement ok
+COPY (
+  SELECT * FROM (VALUES ('a', 1.5), (NULL, NULL)) t(S, N)
+) TO '__TEST_DIR__/write_nulls.rpt' (FORMAT mpfile);
+
+query TR rowsort
+SELECT S, N FROM read_mpfile('__TEST_DIR__/write_nulls.rpt');
+----
+NULL	NULL
+a	1.5
+
+# write_mpfile: column names that cannot be represented in the header row are rejected
+statement error
+COPY (SELECT 1 AS "a,b") TO '__TEST_DIR__/write_bad_name.rpt' (FORMAT mpfile);
+----
+cannot be written to an mpfile
+
+# write_mpfile: unknown COPY options are rejected
+statement error
+COPY (SELECT 1 AS A) TO '__TEST_DIR__/write_bad_option.rpt' (FORMAT mpfile, NOT_AN_OPTION true);
+----
