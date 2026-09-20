@@ -618,4 +618,25 @@ bool MPFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> o
 	return local_fs->FileExists(filename, opener);
 }
 
+bool MPFileSystem::DirectoryExists(const string &directory, optional_ptr<FileOpener> opener) {
+	auto db = FileOpener::TryGetDatabase(opener);
+	if (db) {
+		ScopedMPFSBypass bypass;
+		return DBConfig::GetConfig(*db).file_system->DirectoryExists(directory, opener);
+	}
+	auto local_fs = FileSystem::CreateLocal();
+	return local_fs->DirectoryExists(directory, opener);
+}
+
+void MPFileSystem::RemoveFile(const string &filename, optional_ptr<FileOpener> opener) {
+	auto db = FileOpener::TryGetDatabase(opener);
+	if (db) {
+		ScopedMPFSBypass bypass;
+		DBConfig::GetConfig(*db).file_system->RemoveFile(filename, opener);
+		return;
+	}
+	auto local_fs = FileSystem::CreateLocal();
+	local_fs->RemoveFile(filename, opener);
+}
+
 } // namespace duckdb

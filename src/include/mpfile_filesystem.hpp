@@ -76,6 +76,11 @@ public:
 
 	vector<OpenFileInfo> Glob(const string &path, FileOpener *opener = nullptr) override;
 	bool FileExists(const string &filename, optional_ptr<FileOpener> opener = nullptr) override;
+
+	// DuckDB v2.0 probes the COPY target path with DirectoryExists and may RemoveFile it when overwriting.
+	// Both are claimed by MPFileSystem (it owns .rpt/.prn/.fac paths), so forward them to the real filesystem.
+	bool DirectoryExists(const string &directory, optional_ptr<FileOpener> opener = nullptr) override;
+	void RemoveFile(const string &filename, optional_ptr<FileOpener> opener = nullptr) override;
 };
 
 } // namespace duckdb
