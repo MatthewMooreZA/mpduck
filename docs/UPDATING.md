@@ -12,6 +12,16 @@ as follows:
   - the `@vX.Y.Z` ref on the reusable workflows (`_extension_distribution.yml` and `_extension_code_quality.yml`) should be set to latest tagged release
   - the `duckdb-next-build` job intentionally tracks DuckDB `main` (non-blocking) to give early warning of API breakage; leave it alone
 
+# Supporting more than one DuckDB version
+mpduck builds against DuckDB 1.5.x and 2.0 from the same source. Differences in DuckDB's internal C++ API are isolated
+in `src/include/mpduck_compat.hpp` (see the comment at the top of that file). When a DuckDB bump breaks the build:
+
+- If the break is a rename or a type change, add a helper to `mpduck_compat.hpp` with one implementation per version
+  and call it from the sources, rather than sprinkling `#if` around.
+- To try a new DuckDB, point the `duckdb` submodule at it (or use a `git worktree`, so the existing build is kept)
+  and build. The `duckdb-next-build` CI job does the same against DuckDB `main`.
+- Once an old version is no longer supported, delete its half of the `#if` in the compat header.
+
 # API changes
 DuckDB extensions built with this extension template are built against the internal C++ API of DuckDB. This API is not guaranteed to be stable.
 What this means for extension development is that when updating your extensions DuckDB target version using the above steps, you may run into the fact that your extension no longer builds properly.
