@@ -1,3 +1,4 @@
+#include "mpduck_compat.hpp"
 #include "write_mpfile.hpp"
 #include "mpfile_filesystem.hpp"
 
@@ -107,8 +108,14 @@ struct WriteMPFileLocalState : LocalFunctionData {
 };
 
 static unique_ptr<FunctionData> WriteMPFileBind(ClientContext &context, CopyFunctionBindInput &input,
-                                                const vector<string> &names, const vector<LogicalType> &sql_types) {
+                                                const vector<MPName> &identifiers,
+                                                const vector<LogicalType> &sql_types) {
 	auto data = make_uniq<WriteMPFileData>();
+	vector<string> names;
+	names.reserve(identifiers.size());
+	for (const auto &identifier : identifiers) {
+		names.push_back(MPNameString(identifier));
+	}
 	data->column_names = names;
 	data->column_types = sql_types;
 	data->mp_type_codes.reserve(sql_types.size());
@@ -126,7 +133,7 @@ static unique_ptr<FunctionData> WriteMPFileBind(ClientContext &context, CopyFunc
 	}
 
 	for (auto &option : input.info.options) {
-		auto loption = StringUtil::Lower(option.first);
+		auto loption = StringUtil::Lower(MPNameString(option.first));
 		if (loption == "kv_metadata") {
 			auto &kv_struct = option.second[0];
 			if (kv_struct.type().id() != LogicalTypeId::STRUCT) {
@@ -134,7 +141,7 @@ static unique_ptr<FunctionData> WriteMPFileBind(ClientContext &context, CopyFunc
 			}
 			auto &values = StructValue::GetChildren(kv_struct);
 			for (idx_t i = 0; i < values.size(); i++) {
-				string key = StructType::GetChildName(kv_struct.type(), i);
+				string key = MPNameString(StructType::GetChildName(kv_struct.type(), i));
 				data->metadata_kv.emplace_back(key, values[i].ToString());
 			}
 		} else if (loption == "include_types") {
@@ -144,7 +151,7 @@ static unique_ptr<FunctionData> WriteMPFileBind(ClientContext &context, CopyFunc
 			}
 			data->include_types = BooleanValue::Get(val);
 		} else {
-			throw NotImplementedException("Unrecognised mpfile COPY option: %s", option.first);
+			throw NotImplementedException("Unrecognised mpfile COPY option: %s", MPNameString(option.first));
 		}
 	}
 
@@ -206,7 +213,7 @@ static void WriteMPFileSink(ExecutionContext &context, FunctionData &bind_data, 
 
 	// Flatten all vectors once up front so FlatVector accessors are valid.
 	for (idx_t col = 0; col < ncols; col++) {
-		input.data[col].Flatten(nrows);
+		MPFlatten(input.data[col], nrows);
 	}
 
 	auto &output = lstate.buffer; //! accumulates formatted rows; flushed when threshold is reached

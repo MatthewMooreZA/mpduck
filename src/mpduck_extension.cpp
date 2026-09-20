@@ -1,5 +1,6 @@
 #define DUCKDB_EXTENSION_MAIN
 
+#include "mpduck_compat.hpp"
 #include "mpduck_extension.hpp"
 #include "mpfile_filesystem.hpp"
 #include "write_mpfile.hpp"
@@ -41,16 +42,16 @@ static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths,
 	for (const auto &p : paths) {
 		path_values.push_back(Value(p));
 	}
-	children.push_back(make_uniq<ConstantExpression>(Value::LIST(LogicalType::VARCHAR, std::move(path_values))));
+	children.push_back(MPConstant(Value::LIST(LogicalType::VARCHAR, std::move(path_values))));
 
 	if (options.union_by_name) {
-		auto union_by_name_expr = make_uniq<ConstantExpression>(Value::BOOLEAN(true));
+		auto union_by_name_expr = MPConstant(Value::BOOLEAN(true));
 		union_by_name_expr->SetAlias("union_by_name");
 		children.push_back(std::move(union_by_name_expr));
 	}
 
 	if (options.ignore_errors) {
-		auto ignore_errors_expr = make_uniq<ConstantExpression>(Value::BOOLEAN(true));
+		auto ignore_errors_expr = MPConstant(Value::BOOLEAN(true));
 		ignore_errors_expr->SetAlias("ignore_errors");
 		children.push_back(std::move(ignore_errors_expr));
 	}
@@ -59,15 +60,15 @@ static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths,
 		child_list_t<Value> dtypes_fields;
 		size_t n = MinValue(schema.column_names.size(), schema.column_types.size());
 		for (size_t i = 0; i < n; i++) {
-			dtypes_fields.push_back({schema.column_names[i], Value(schema.column_types[i])});
+			dtypes_fields.push_back({MPMakeName(schema.column_names[i]), Value(schema.column_types[i])});
 		}
-		auto dtypes_expr = make_uniq<ConstantExpression>(Value::STRUCT(std::move(dtypes_fields)));
+		auto dtypes_expr = MPConstant(Value::STRUCT(std::move(dtypes_fields)));
 		dtypes_expr->SetAlias("dtypes");
 		children.push_back(std::move(dtypes_expr));
 	}
 
 	if (options.filename) {
-		auto filename_expr = make_uniq<ConstantExpression>(*options.filename);
+		auto filename_expr = MPConstant(*options.filename);
 		filename_expr->SetAlias("filename");
 		children.push_back(std::move(filename_expr));
 	}
@@ -78,7 +79,7 @@ static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths,
 	// Wrap in SELECT * EXCLUDE ("!") to hide the indicator column from callers.
 	auto select_node = make_uniq<SelectNode>();
 	auto star = make_uniq<StarExpression>();
-	star->exclude_list.insert(QualifiedColumnName("!"));
+	MPExcludeColumn(*star, "!");
 	select_node->select_list.push_back(std::move(star));
 	select_node->from_table = std::move(table_function);
 
@@ -189,7 +190,7 @@ static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableF
 
 	auto schema = ParseMPFileSchema(path, fs);
 	auto table_function = MakeReadCSVRef(path, schema, std::move(options));
-	table_function->alias = fs.ExtractBaseName(path);
+	table_function->alias = MPMakeName(fs.ExtractBaseName(path));
 	return std::move(table_function);
 }
 
@@ -209,7 +210,7 @@ static unique_ptr<TableRef> ReadMPFileReplacement(ClientContext &context, Replac
 	}
 	auto schema = ParseMPFileSchema(table_name, fs);
 	auto table_function = MakeReadCSVRef(table_name, schema);
-	table_function->alias = fs.ExtractBaseName(table_name);
+	table_function->alias = MPMakeName(fs.ExtractBaseName(table_name));
 	return std::move(table_function);
 }
 
