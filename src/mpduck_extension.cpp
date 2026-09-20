@@ -99,7 +99,7 @@ static unique_ptr<TableRef> MakeReadCSVRef(const string &path, const MPFileSchem
 
 //! Read a BOOLEAN named parameter. Absent or NULL means false, like read_csv.
 static bool ExtractBool(TableFunctionBindInput &input, const string &name) {
-	auto it = input.named_parameters.find(name);
+	auto it = input.named_parameters.find(MPMakeName(name));
 	return it != input.named_parameters.end() && !it->second.IsNull() && it->second.GetValue<bool>();
 }
 
