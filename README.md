@@ -33,7 +33,12 @@ SELECT * FROM read_mpfile(['region_a*.rpt', 'region_b*.rpt']);
 
 ### union_by_name
 
-Like `read_csv`, `read_mpfile` takes `union_by_name`, which defaults to `false`.
+> **Breaking change in mpduck 2.0.** Versions before 2.0 always combined multiple files as if
+> `union_by_name = true`. From 2.0, `read_mpfile` takes a `union_by_name` parameter that **defaults to `false`**,
+> matching `read_csv`, so reads that relied on the old behaviour now need `union_by_name = true`.
+> See [Upgrading to mpduck 2.0](#upgrading-to-mpduck-20).
+
+Like `read_csv`, `read_mpfile` takes `union_by_name` (from mpduck 2.0), which defaults to `false`.
 
 - **`false` (default):** the files are expected to have the same columns. The column types come from the
   `VARIABLE_TYPES` row of the first file that has data, and the remaining files are opened lazily by the scan, so
@@ -52,10 +57,27 @@ SELECT * FROM read_mpfile('data/*.rpt', union_by_name = true);
 
 `FROM 'data/*.rpt'` behaves like the default (`union_by_name = false`).
 
+#### Upgrading to mpduck 2.0
+
+When moving from a version before 2.0, add `union_by_name = true` if a multi-file read (a glob, or a list of files) does any of these:
+
+| Your files | Before 2.0 | 2.0, by default | To keep the old behaviour |
+|---|---|---|---|
+| have different columns | combined by name, missing columns `NULL` | error: `COLUMN_TYPES error: Columns with names ... do not exist in the CSV File` | `union_by_name = true` |
+| have the same columns with different types (e.g. `SMALLINT` in one, `INTEGER` in another) | types widened | types taken from the first file that has data (a value that does not fit is an error) | `union_by_name = true` |
+| include an empty file, or one with no header row | file skipped | error | `union_by_name = true` |
+| are read with `FROM 'data/*.rpt'` | combined by name | same as `read_mpfile` with the default | use `read_mpfile('data/*.rpt', union_by_name = true)` |
+
+Reads of a single file, and of several files that share the same columns and types, are unaffected.
+
+One further change in 2.0 applies in both modes: an unreadable file (for example a missing path, or a permission or
+credentials error) used to be silently dropped from a multi-file read, returning partial results. It is now an error.
+
 ### ignore_errors
 
-Like `read_csv`, `read_mpfile` takes `ignore_errors`, which defaults to `false`. When it is `true`, rows that fail
-to parse (for example a non-numeric value in a `S`, `I` or `N` column) are skipped instead of raising an error.
+*Available from mpduck 2.0.* Like `read_csv`, `read_mpfile` takes `ignore_errors`, which defaults to `false`. When
+it is `true`, rows that fail to parse (for example a non-numeric value in a `S`, `I` or `N` column) are skipped
+instead of raising an error.
 
 ```sql
 SELECT * FROM read_mpfile('model_points.rpt', ignore_errors = true);
