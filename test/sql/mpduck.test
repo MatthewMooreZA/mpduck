@@ -527,3 +527,49 @@ cannot be written to an mpfile
 statement error
 COPY (SELECT 1 AS A) TO '__TEST_DIR__/write_bad_option.rpt' (FORMAT mpfile, NOT_AN_OPTION true);
 ----
+
+# read_mpfile: a glob of files with identical VARIABLE_TYPES schemas is scanned without union_by_name
+statement ok
+COPY (SELECT 'a' AS N, CAST(1 AS SMALLINT) AS V) TO '__TEST_DIR__/same_1.rpt';
+
+statement ok
+COPY (SELECT 'b' AS N, CAST(2 AS SMALLINT) AS V) TO '__TEST_DIR__/same_2.rpt';
+
+query TI rowsort
+SELECT N, V FROM read_mpfile('__TEST_DIR__/same_*.rpt');
+----
+a	1
+b	2
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_mpfile('__TEST_DIR__/same_*.rpt')) ORDER BY column_name;
+----
+N	VARCHAR
+V	SMALLINT
+
+# read_mpfile: list form over identical-schema files also works
+query TI rowsort
+SELECT N, V FROM read_mpfile(['__TEST_DIR__/same_1.rpt', '__TEST_DIR__/same_2.rpt']);
+----
+a	1
+b	2
+
+# read_mpfile: same columns in a different order still need union_by_name and must match by name
+statement ok
+COPY (SELECT CAST(3 AS SMALLINT) AS V, 'c' AS N) TO '__TEST_DIR__/order_1.rpt';
+
+statement ok
+COPY (SELECT 'd' AS N, CAST(4 AS SMALLINT) AS V) TO '__TEST_DIR__/order_2.rpt';
+
+query TI rowsort
+SELECT N, V FROM read_mpfile('__TEST_DIR__/order_*.rpt');
+----
+c	3
+d	4
+
+# read_mpfile: the filename column still works on the identical-schema (no union_by_name) path
+query TT rowsort
+SELECT N, parse_filename(filename) FROM read_mpfile('__TEST_DIR__/same_*.rpt', filename=true);
+----
+a	same_1.rpt
+b	same_2.rpt

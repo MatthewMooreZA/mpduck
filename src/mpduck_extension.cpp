@@ -19,11 +19,24 @@
 
 namespace duckdb {
 
+//! True when every file has a VARIABLE_TYPES schema and all of them list the same columns and types in the same
+//! order, so the files can be scanned as one relation without union_by_name.
+static bool SchemasIdentical(const vector<MPFileSchema> &schemas) {
+	for (const auto &s : schemas) {
+		if (!s.found || s.column_names != schemas[0].column_names || s.column_types != schemas[0].column_types) {
+			return false;
+		}
+	}
+	return true;
+}
+
 //! Build a read_csv_auto ref for the given list of paths, wrapped in SELECT * EXCLUDE ("!").
 //! When a schema is provided its column types are forwarded via the dtypes parameter.
+//! When union_by_name is true, read_csv_auto binds and sniffs every file up front and reports a placeholder
+//! cardinality; pass false when the files are known to share one schema (see SchemasIdentical).
 //! When filename_opt is non-null its value is forwarded as the filename= named parameter of read_csv_auto.
 static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths, const MPFileSchema &schema,
-                                                    unique_ptr<Value> filename_opt = nullptr) {
+                                                    bool union_by_name, unique_ptr<Value> filename_opt = nullptr) {
 	vector<unique_ptr<ParsedExpression>> children;
 	vector<Value> path_values;
 	path_values.reserve(paths.size());
@@ -32,9 +45,11 @@ static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths,
 	}
 	children.push_back(make_uniq<ConstantExpression>(Value::LIST(LogicalType::VARCHAR, std::move(path_values))));
 
-	auto union_by_name = make_uniq<ConstantExpression>(Value::BOOLEAN(true));
-	union_by_name->SetAlias("union_by_name");
-	children.push_back(std::move(union_by_name));
+	if (union_by_name) {
+		auto union_by_name_expr = make_uniq<ConstantExpression>(Value::BOOLEAN(true));
+		union_by_name_expr->SetAlias("union_by_name");
+		children.push_back(std::move(union_by_name_expr));
+	}
 
 	if (schema.found && !schema.column_names.empty() && !schema.column_types.empty()) {
 		child_list_t<Value> dtypes_fields;
@@ -69,10 +84,11 @@ static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths,
 	return make_uniq<SubqueryRef>(std::move(select_stmt));
 }
 
-//! Build a read_csv_auto ref for a single path (wraps MakeReadCSVRefFromPaths).
+//! Build a read_csv_auto ref for a single path (wraps MakeReadCSVRefFromPaths). One file is trivially
+//! consistent with itself, so union_by_name is never needed.
 static unique_ptr<TableRef> MakeReadCSVRef(const string &path, const MPFileSchema &schema,
                                            unique_ptr<Value> filename_opt = nullptr) {
-	return MakeReadCSVRefFromPaths({path}, schema, std::move(filename_opt));
+	return MakeReadCSVRefFromPaths({path}, schema, false, std::move(filename_opt));
 }
 
 //! Extract the filename named parameter from input, if present.
@@ -84,7 +100,8 @@ static unique_ptr<Value> ExtractFilenameOpt(TableFunctionBindInput &input) {
 	return nullptr;
 }
 
-//! Redirect read_mpfile('path') to read_csv_auto('path', union_by_name=true[, dtypes=...]).
+//! Redirect read_mpfile('path') to read_csv_auto(['path'][, dtypes=...]). union_by_name=true is added only for
+//! globs whose files do not all share one VARIABLE_TYPES schema.
 //! The registered MPFileSystem intercepts each file open and returns filtered content.
 static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableFunctionBindInput &input) {
 	auto path = input.inputs[0].GetValue<string>();
@@ -107,7 +124,7 @@ static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableF
 			throw InvalidInputException("read_mpfile: no files with data matched '%s'", path);
 		}
 		auto schema = MergeSchemas(schemas);
-		return MakeReadCSVRefFromPaths(data_paths, schema, std::move(filename_opt));
+		return MakeReadCSVRefFromPaths(data_paths, schema, !SchemasIdentical(schemas), std::move(filename_opt));
 	}
 
 	auto schema = ParseMPFileSchema(path, fs);
@@ -168,7 +185,7 @@ static unique_ptr<TableRef> ReadMPFileListBindReplace(ClientContext &context, Ta
 	auto schema = MergeSchemas(schemas);
 
 	// No alias — list input spans multiple files.
-	return MakeReadCSVRefFromPaths(all_paths, schema, std::move(filename_opt));
+	return MakeReadCSVRefFromPaths(all_paths, schema, !SchemasIdentical(schemas), std::move(filename_opt));
 }
 
 static void LoadInternal(ExtensionLoader &loader) {
