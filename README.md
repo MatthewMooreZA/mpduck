@@ -38,11 +38,13 @@ Like `read_csv`, `read_mpfile` takes `union_by_name`, which defaults to `false`.
 - **`false` (default):** the files are expected to have the same columns. The column types come from the
   `VARIABLE_TYPES` row of the first file that has data, and the remaining files are opened lazily by the scan, so
   the cost of binding does not grow with the number of files. This matters most on remote storage such as S3.
-  Files with different columns fail with an error. Files with no data are not skipped, and a missing or unreadable
-  file is an error.
+  Files with different columns fail with an error, and files with no data are not skipped.
 - **`true`:** every file's header and `VARIABLE_TYPES` rows are read up front. Files with no data are skipped,
   columns are matched by name (missing columns become `NULL`), and types that differ between files are widened
   (`SMALLINT` < `INTEGER` < `DOUBLE`, anything else becomes `VARCHAR`). This costs an extra open and read per file.
+
+In both modes a file that cannot be opened (missing, permission denied, network or credential errors) is an
+error; it is never silently skipped.
 
 ```sql
 SELECT * FROM read_mpfile('data/*.rpt', union_by_name = true);

@@ -638,3 +638,37 @@ no files matched
 statement error
 SELECT * FROM read_mpfile('test/data/glob_a.rpt', union_by_name='maybe');
 ----
+
+# An unreadable file is an error even with union_by_name=true; it used to be silently dropped from the result.
+statement error
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/does_not_exist.rpt'], union_by_name=true);
+----
+No such file or directory
+
+statement error
+SELECT NAME FROM read_mpfile('test/data/does_not_exist.rpt');
+----
+No such file or directory
+
+statement error
+SELECT * FROM 'test/data/does_not_exist.rpt';
+----
+No such file or directory
+
+# The implicit FROM 'glob' scan expands the glob and takes column types from VARIABLE_TYPES.
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM '__TEST_DIR__/same_*.rpt') ORDER BY column_name;
+----
+N	VARCHAR
+V	SMALLINT
+
+query TI rowsort
+SELECT N, V FROM '__TEST_DIR__/same_*.rpt';
+----
+a	1
+b	2
+
+statement error
+SELECT * FROM 'test/data/nomatch_*.rpt';
+----
+no files with data matched

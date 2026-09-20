@@ -136,12 +136,12 @@ static string MapMPType(const string &mp_type, size_t col_idx) {
 MPFileSchema ParseMPFileSchema(const string &path, FileSystem &fs) {
 	MPFileSchema schema;
 
+	// Errors opening the file (missing, permission denied, network, credentials) propagate: swallowing them
+	// would make callers treat an unreadable file as one with no data and silently drop it from a glob.
 	unique_ptr<FileHandle> handle;
-	try {
+	{
 		ScopedMPFSBypass bypass;
 		handle = fs.OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
-	} catch (...) {
-		return schema;
 	}
 
 	ForEachLine(*handle, [&](const string &line) -> bool {

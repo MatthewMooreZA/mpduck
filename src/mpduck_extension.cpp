@@ -183,6 +183,11 @@ static unique_ptr<TableRef> ReadMPFileReplacement(ClientContext &context, Replac
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
+	if (FileSystem::HasGlob(table_name)) {
+		// A glob pattern is not an openable path: expand it like read_mpfile does (union_by_name = false).
+		return ReadMPFileMultiRef(fs, {table_name}, false, nullptr,
+		                          StringUtil::Format("read_mpfile: no files with data matched '%s'", table_name));
+	}
 	auto schema = ParseMPFileSchema(table_name, fs);
 	auto table_function = MakeReadCSVRef(table_name, schema);
 	table_function->alias = fs.ExtractBaseName(table_name);

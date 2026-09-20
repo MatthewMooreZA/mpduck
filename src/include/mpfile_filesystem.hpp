@@ -13,7 +13,9 @@ struct MPFileSchema {
 };
 
 //! Parse the header ('!') and schema ('VARIABLE_TYPES') rows from an mpfile.
-//! Reads only until the first data ('*') row, 'VARIABLE_TYPES' row, or unrecognised line.
+//! Reads only until the first data ('*') row.
+//! Throws if the file cannot be opened. A file that opens but has no header row yields an empty schema
+//! (column_names.size() < 2), which callers treat as "no data".
 MPFileSchema ParseMPFileSchema(const string &path, FileSystem &fs);
 
 //! Merge a collection of schemas into one, widening types where they differ.
