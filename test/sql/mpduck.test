@@ -31,7 +31,7 @@ SCORE	DOUBLE
 #          SALARY=DOUBLE, DEPT=VARCHAR, RATING=DOUBLE, GRADE=VARCHAR
 query II
 SELECT column_name, column_type
-FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/glob_*.rpt'))
+FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/glob_*.rpt', union_by_name=true))
 ORDER BY column_name;
 ----
 AGE	INTEGER
@@ -76,7 +76,7 @@ Velociraptor	1.8	1924
 # Confirm data round-trips correctly: glob_*.rpt now covers all four glob files;
 # NAME is the column present in every file.
 query T rowsort
-SELECT NAME FROM read_mpfile('test/data/glob_*.rpt');
+SELECT NAME FROM read_mpfile('test/data/glob_*.rpt', union_by_name=true);
 ----
 Alice
 Bob
@@ -85,14 +85,14 @@ Diana
 
 # List overload: explicit list of files — schemas merged, rows combined
 query IIIR rowsort
-SELECT NAME, AGE, CODE, SCORE FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt']);
+SELECT NAME, AGE, CODE, SCORE FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt'], union_by_name=true);
 ----
 Alice	30	ABC	98.5
 Bob	25	XYZ	72.0
 
 # List overload: single glob entry expands to all matching files; NAME is present in all four
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_*.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_*.rpt'], union_by_name=true);
 ----
 Alice
 Bob
@@ -102,7 +102,7 @@ Diana
 # List overload: schema merging across list entries (AGE widened SMALLINT→INTEGER, SCORE widened →DOUBLE)
 query II
 SELECT column_name, column_type
-FROM (DESCRIBE SELECT * FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt']))
+FROM (DESCRIBE SELECT * FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt'], union_by_name=true))
 ORDER BY column_name;
 ----
 AGE	INTEGER
@@ -116,7 +116,7 @@ SCORE	DOUBLE
 # NAME is the only column present in all four files; selecting it gives a clean equality check.
 # Results must equal the equivalent explicit file list.
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_a*.rpt', 'test/data/glob_b*.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_a*.rpt', 'test/data/glob_b*.rpt'], union_by_name=true);
 ----
 Alice
 Bob
@@ -124,7 +124,7 @@ Charlie
 Diana
 
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt', 'test/data/glob_b.rpt', 'test/data/glob_b2.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt', 'test/data/glob_b.rpt', 'test/data/glob_b2.rpt'], union_by_name=true);
 ----
 Alice
 Bob
@@ -135,7 +135,7 @@ Diana
 # footer.rpt contributes Alice and Bob; all six rows are union'd via union_by_name.
 # Results must equal the equivalent explicit file list.
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_a*.rpt', 'test/data/glob_b*.rpt', 'test/data/footer.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_a*.rpt', 'test/data/glob_b*.rpt', 'test/data/footer.rpt'], union_by_name=true);
 ----
 Alice
 Alice
@@ -145,7 +145,7 @@ Charlie
 Diana
 
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt', 'test/data/glob_b.rpt', 'test/data/glob_b2.rpt', 'test/data/footer.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt', 'test/data/glob_b.rpt', 'test/data/glob_b2.rpt', 'test/data/footer.rpt'], union_by_name=true);
 ----
 Alice
 Alice
@@ -176,7 +176,7 @@ Bob	25	72.3	false	1995-06-20
 # Mixed indicator variants across files: '!' and '!1' both normalise to the same indicator
 # column '!', so schema merging produces exactly one '!' column and the EXCLUDE step works.
 query TIT rowsort
-SELECT NAME, AGE, CITY FROM read_mpfile(['test/data/mixed_indicator_a.rpt', 'test/data/mixed_indicator_b.rpt']);
+SELECT NAME, AGE, CITY FROM read_mpfile(['test/data/mixed_indicator_a.rpt', 'test/data/mixed_indicator_b.rpt'], union_by_name=true);
 ----
 Alice	30	London
 Bob	25	Paris
@@ -184,7 +184,7 @@ Bob	25	Paris
 # The merged schema must contain no '!' column — only the data columns.
 query II
 SELECT column_name, column_type
-FROM (DESCRIBE SELECT * FROM read_mpfile(['test/data/mixed_indicator_a.rpt', 'test/data/mixed_indicator_b.rpt']))
+FROM (DESCRIBE SELECT * FROM read_mpfile(['test/data/mixed_indicator_a.rpt', 'test/data/mixed_indicator_b.rpt'], union_by_name=true))
 ORDER BY column_name;
 ----
 AGE	SMALLINT
@@ -419,7 +419,7 @@ SCORE	DOUBLE
 # only the two files with data contribute columns.
 query II
 SELECT column_name, column_type
-FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/glob_a*.rpt'))
+FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/glob_a*.rpt', union_by_name=true))
 ORDER BY column_name;
 ----
 AGE	SMALLINT
@@ -431,19 +431,19 @@ SCORE	DOUBLE
 
 # Empty-file filtering: file with no '!' column header is silently ignored via list input.
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/no_columns.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/no_columns.rpt'], union_by_name=true);
 ----
 Alice
 
 # Empty-file filtering: zero-byte file is silently ignored via list input.
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt'], union_by_name=true);
 ----
 Alice
 
 # Empty-file filtering: list containing only empty/no-column files throws an error.
 statement error
-SELECT * FROM read_mpfile(['test/data/empty.rpt', 'test/data/no_columns.rpt']);
+SELECT * FROM read_mpfile(['test/data/empty.rpt', 'test/data/no_columns.rpt'], union_by_name=true);
 ----
 
 # filename=true adds a filename column containing the file path for each row
@@ -454,14 +454,14 @@ Alice	30	glob_a.rpt
 
 # filename=true tracks per-file paths when reading a glob
 query TT rowsort
-SELECT NAME, parse_filename(filename) FROM read_mpfile('test/data/glob_a*.rpt', filename=true);
+SELECT NAME, parse_filename(filename) FROM read_mpfile('test/data/glob_a*.rpt', filename=true, union_by_name=true);
 ----
 Alice	glob_a.rpt
 Charlie	glob_a2.rpt
 
 # filename=true works with the list overload
 query TT rowsort
-SELECT NAME, parse_filename(filename) FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt'], filename=true);
+SELECT NAME, parse_filename(filename) FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt'], filename=true, union_by_name=true);
 ----
 Alice	glob_a.rpt
 Bob	glob_b.rpt
@@ -573,3 +573,68 @@ SELECT N, parse_filename(filename) FROM read_mpfile('__TEST_DIR__/same_*.rpt', f
 ----
 a	same_1.rpt
 b	same_2.rpt
+
+# read_mpfile: union_by_name defaults to false, like read_csv. Files with different columns are an error...
+statement error
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt']);
+----
+do not exist in the CSV File
+
+statement error
+SELECT NAME FROM read_mpfile('test/data/glob_a*.rpt');
+----
+do not exist in the CSV File
+
+# ...and union_by_name := false is the same as omitting it.
+statement error
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt'], union_by_name=false);
+----
+do not exist in the CSV File
+
+# ...while union_by_name := true combines them by column name.
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt'], union_by_name=true);
+----
+Alice
+Charlie
+
+# Without union_by_name the schema (and so the column types) comes from the first file only.
+# glob_a has AGE SMALLINT / SCORE DOUBLE; glob_b has AGE INTEGER / SCORE INTEGER.
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt']))
+ORDER BY column_name;
+----
+AGE	SMALLINT
+CODE	VARCHAR
+NAME	VARCHAR
+SCORE	DOUBLE
+
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt']);
+----
+Alice	30
+Bob	25
+
+# Without union_by_name, files with no data are not filtered out: they fail like they would in read_csv.
+statement error
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt']);
+----
+do not exist in the CSV File
+
+# A missing file is an error rather than being silently dropped.
+statement error
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/does_not_exist.rpt']);
+----
+No such file or directory
+
+# Input with no file that has any data is still an error with a clear message.
+statement error
+SELECT * FROM read_mpfile(['test/data/empty.rpt', 'test/data/no_columns.rpt']);
+----
+no files matched
+
+# union_by_name must be a boolean.
+statement error
+SELECT * FROM read_mpfile('test/data/glob_a.rpt', union_by_name='maybe');
+----

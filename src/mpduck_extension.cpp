@@ -19,21 +19,10 @@
 
 namespace duckdb {
 
-//! True when every file has a VARIABLE_TYPES schema and all of them list the same columns and types in the same
-//! order, so the files can be scanned as one relation without union_by_name.
-static bool SchemasIdentical(const vector<MPFileSchema> &schemas) {
-	for (const auto &s : schemas) {
-		if (!s.found || s.column_names != schemas[0].column_names || s.column_types != schemas[0].column_types) {
-			return false;
-		}
-	}
-	return true;
-}
-
 //! Build a read_csv_auto ref for the given list of paths, wrapped in SELECT * EXCLUDE ("!").
 //! When a schema is provided its column types are forwarded via the dtypes parameter.
-//! When union_by_name is true, read_csv_auto binds and sniffs every file up front and reports a placeholder
-//! cardinality; pass false when the files are known to share one schema (see SchemasIdentical).
+//! When union_by_name is true it is forwarded to read_csv_auto, which binds and sniffs every file up front
+//! (and reports a placeholder cardinality); files may then differ in columns and types.
 //! When filename_opt is non-null its value is forwarded as the filename= named parameter of read_csv_auto.
 static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths, const MPFileSchema &schema,
                                                     bool union_by_name, unique_ptr<Value> filename_opt = nullptr) {
@@ -100,8 +89,74 @@ static unique_ptr<Value> ExtractFilenameOpt(TableFunctionBindInput &input) {
 	return nullptr;
 }
 
-//! Redirect read_mpfile('path') to read_csv_auto(['path'][, dtypes=...]). union_by_name=true is added only for
-//! globs whose files do not all share one VARIABLE_TYPES schema.
+//! Extract the union_by_name named parameter from input. Defaults to false, like read_csv.
+static bool ExtractUnionByName(TableFunctionBindInput &input) {
+	auto it = input.named_parameters.find("union_by_name");
+	return it != input.named_parameters.end() && !it->second.IsNull() && it->second.GetValue<bool>();
+}
+
+//! Concrete file paths for entries that are each either a literal path or a glob, in order.
+static vector<string> ExpandEntries(FileSystem &fs, const vector<string> &entries) {
+	vector<string> paths;
+	for (const auto &entry : entries) {
+		if (FileSystem::HasGlob(entry)) {
+			for (const auto &info : fs.Glob(entry)) {
+				paths.push_back(info.path);
+			}
+		} else {
+			paths.push_back(entry);
+		}
+	}
+	return paths;
+}
+
+//! Shared by the glob and list forms of read_mpfile. Files are never combined by name unless asked to.
+//!
+//! union_by_name = false (default): the entries are only expanded. The schema for the dtypes parameter comes from
+//! the first matched file that has data; every other file is left for read_csv_auto to open lazily, so bind
+//! cost does not grow with the number of files (which matters most on remote storage). All files must have the
+//! same columns, as with read_csv.
+//!
+//! union_by_name = true: every file's header and VARIABLE_TYPES rows are read up front, files with no data are
+//! dropped, the schemas are merged (numeric types widen, other mismatches become VARCHAR) and read_csv_auto is
+//! asked to union the files by column name. This costs one extra open and read per file.
+static unique_ptr<TableRef> ReadMPFileMultiRef(FileSystem &fs, const vector<string> &entries, bool union_by_name,
+                                               unique_ptr<Value> filename_opt, const string &no_match_message) {
+	auto paths = ExpandEntries(fs, entries);
+
+	if (!union_by_name) {
+		MPFileSchema schema;
+		for (const auto &path : paths) {
+			auto s = ParseMPFileSchema(path, fs);
+			if (s.column_names.size() >= 2) { // "!" indicator + at least one column
+				schema = std::move(s);
+				break;
+			}
+		}
+		if (schema.column_names.empty()) {
+			throw InvalidInputException("%s", no_match_message);
+		}
+		return MakeReadCSVRefFromPaths(paths, schema, false, std::move(filename_opt));
+	}
+
+	vector<string> data_paths;
+	vector<MPFileSchema> schemas;
+	for (const auto &path : paths) {
+		auto s = ParseMPFileSchema(path, fs);
+		if (s.column_names.size() >= 2) {
+			data_paths.push_back(path);
+			schemas.push_back(std::move(s));
+		}
+	}
+	if (data_paths.empty()) {
+		throw InvalidInputException("%s", no_match_message);
+	}
+	auto schema = MergeSchemas(schemas);
+	return MakeReadCSVRefFromPaths(data_paths, schema, true, std::move(filename_opt));
+}
+
+//! Redirect read_mpfile('path') to read_csv_auto(['path'][, dtypes=...]). A glob is handled by
+//! ReadMPFileMultiRef; a literal path is a single file and needs no union.
 //! The registered MPFileSystem intercepts each file open and returns filtered content.
 static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableFunctionBindInput &input) {
 	auto path = input.inputs[0].GetValue<string>();
@@ -109,22 +164,8 @@ static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableF
 	auto filename_opt = ExtractFilenameOpt(input);
 
 	if (FileSystem::HasGlob(path)) {
-		// Expand the glob, filter out empty files, parse schemas, and merge.
-		auto files = fs.Glob(path);
-		vector<string> data_paths;
-		vector<MPFileSchema> schemas;
-		for (const auto &info : files) {
-			auto s = ParseMPFileSchema(info.path, fs);
-			if (s.column_names.size() >= 2) { // "!" indicator + at least one column
-				data_paths.push_back(info.path);
-				schemas.push_back(std::move(s));
-			}
-		}
-		if (data_paths.empty()) {
-			throw InvalidInputException("read_mpfile: no files with data matched '%s'", path);
-		}
-		auto schema = MergeSchemas(schemas);
-		return MakeReadCSVRefFromPaths(data_paths, schema, !SchemasIdentical(schemas), std::move(filename_opt));
+		return ReadMPFileMultiRef(fs, {path}, ExtractUnionByName(input), std::move(filename_opt),
+		                          StringUtil::Format("read_mpfile: no files with data matched '%s'", path));
 	}
 
 	auto schema = ParseMPFileSchema(path, fs);
@@ -149,43 +190,15 @@ static unique_ptr<TableRef> ReadMPFileReplacement(ClientContext &context, Replac
 }
 
 //! Redirect read_mpfile(['path1', 'path2', ...]) — each entry may be a literal path or glob.
-//! Schemas from all matched files are merged before forwarding to read_csv_auto.
+//! See ReadMPFileMultiRef for how the files are combined. No alias — list input spans multiple files.
 static unique_ptr<TableRef> ReadMPFileListBindReplace(ClientContext &context, TableFunctionBindInput &input) {
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto &path_entries = ListValue::GetChildren(input.inputs[0]);
-	auto filename_opt = ExtractFilenameOpt(input);
-
-	// Expand globs, collect concrete paths, and filter out files with no data.
-	vector<string> all_paths;
-	vector<MPFileSchema> schemas;
-	for (const auto &entry : path_entries) {
-		auto path = entry.GetValue<string>();
-		if (FileSystem::HasGlob(path)) {
-			auto files = fs.Glob(path);
-			for (auto &info : files) {
-				auto s = ParseMPFileSchema(info.path, fs);
-				if (s.column_names.size() >= 2) { // "!" indicator + at least one column
-					all_paths.push_back(info.path);
-					schemas.push_back(std::move(s));
-				}
-			}
-		} else {
-			auto s = ParseMPFileSchema(path, fs);
-			if (s.column_names.size() >= 2) {
-				all_paths.push_back(path);
-				schemas.push_back(std::move(s));
-			}
-		}
+	vector<string> entries;
+	for (const auto &entry : ListValue::GetChildren(input.inputs[0])) {
+		entries.push_back(entry.GetValue<string>());
 	}
-
-	if (all_paths.empty()) {
-		throw InvalidInputException("read_mpfile: no files matched the provided paths");
-	}
-
-	auto schema = MergeSchemas(schemas);
-
-	// No alias — list input spans multiple files.
-	return MakeReadCSVRefFromPaths(all_paths, schema, !SchemasIdentical(schemas), std::move(filename_opt));
+	return ReadMPFileMultiRef(fs, entries, ExtractUnionByName(input), ExtractFilenameOpt(input),
+	                          "read_mpfile: no files matched the provided paths");
 }
 
 static void LoadInternal(ExtensionLoader &loader) {
@@ -198,12 +211,14 @@ static void LoadInternal(ExtensionLoader &loader) {
 	TableFunction read_mpfile("read_mpfile", {LogicalType::VARCHAR}, nullptr, nullptr);
 	read_mpfile.bind_replace = ReadMPFileBindReplace;
 	read_mpfile.named_parameters["filename"] = LogicalType::ANY;
+	read_mpfile.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
 	loader.RegisterFunction(read_mpfile);
 
 	// List overload: SELECT * FROM read_mpfile(['file1.rpt', 'glob_*.rpt', ...])
 	TableFunction read_mpfile_list("read_mpfile", {LogicalType::LIST(LogicalType::VARCHAR)}, nullptr, nullptr);
 	read_mpfile_list.bind_replace = ReadMPFileListBindReplace;
 	read_mpfile_list.named_parameters["filename"] = LogicalType::ANY;
+	read_mpfile_list.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
 	loader.RegisterFunction(read_mpfile_list);
 
 	// Implicit scan: SELECT * FROM 'file.rpt'
