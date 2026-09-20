@@ -52,6 +52,19 @@ SELECT * FROM read_mpfile('data/*.rpt', union_by_name = true);
 
 `FROM 'data/*.rpt'` behaves like the default (`union_by_name = false`).
 
+### ignore_errors
+
+Like `read_csv`, `read_mpfile` takes `ignore_errors`, which defaults to `false`. When it is `true`, rows that fail
+to parse (for example a non-numeric value in a `S`, `I` or `N` column) are skipped instead of raising an error.
+
+```sql
+SELECT * FROM read_mpfile('model_points.rpt', ignore_errors = true);
+```
+
+It behaves exactly as it does in `read_csv`: it skips rows, not files, so a file that cannot be opened is still an
+error, and only the columns a query actually reads are converted, so a bad value in a column the query does not
+use does not drop the row.
+
 ## Writing files
 
 ```sql

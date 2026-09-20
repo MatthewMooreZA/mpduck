@@ -672,3 +672,74 @@ statement error
 SELECT * FROM 'test/data/nomatch_*.rpt';
 ----
 no files with data matched
+
+# read_mpfile: ignore_errors defaults to false, like read_csv. A row that fails to convert is an error...
+# bad_rows.rpt: Bob's AGE (SMALLINT) and Carol's SCORE (DOUBLE) do not parse; Alice and Dave are fine.
+statement error
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/bad_rows.rpt');
+----
+Could not convert string "notanumber"
+
+statement error
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/bad_rows.rpt', ignore_errors=false);
+----
+Could not convert string "notanumber"
+
+# ...and with ignore_errors=true the rows that fail to convert are skipped.
+query TIR rowsort
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/bad_rows.rpt', ignore_errors=true);
+----
+Alice	30	98.5
+Dave	25	60.5
+
+# It behaves the same as read_csv's ignore_errors.
+query TIR rowsort
+SELECT NAME, AGE, SCORE
+FROM read_csv('test/data/bad_rows.rpt', header=true,
+              dtypes={'!': 'VARCHAR', NAME: 'VARCHAR', AGE: 'SMALLINT', SCORE: 'DOUBLE'}, ignore_errors=true);
+----
+Alice	30	98.5
+Dave	25	60.5
+
+# As in read_csv, only the columns a query reads are converted: Carol's bad SCORE is never looked at here,
+# so her row is kept, while Bob (bad AGE) is still skipped.
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('test/data/bad_rows.rpt', ignore_errors=true);
+----
+Alice	30
+Carol	41
+Dave	25
+
+# ignore_errors works with the glob and list forms, with union_by_name, and with filename.
+
+query TIR rowsort
+SELECT NAME, AGE, SCORE FROM read_mpfile(['test/data/bad_rows.rpt', 'test/data/bad_rows.rpt'], ignore_errors=true);
+----
+Alice	30	98.5
+Alice	30	98.5
+Dave	25	60.5
+Dave	25	60.5
+
+query TIR rowsort
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/bad_row*.rpt', union_by_name=true, ignore_errors=true);
+----
+Alice	30	98.5
+Dave	25	60.5
+
+query TRT rowsort
+SELECT NAME, SCORE, parse_filename(filename) FROM read_mpfile('test/data/bad_rows.rpt', ignore_errors=true, filename=true);
+----
+Alice	98.5	bad_rows.rpt
+Bob	72.0	bad_rows.rpt
+Dave	60.5	bad_rows.rpt
+
+# ignore_errors skips rows, not files: an unreadable file is still an error, as in read_csv.
+statement error
+SELECT NAME FROM read_mpfile(['test/data/bad_rows.rpt', 'test/data/does_not_exist.rpt'], ignore_errors=true);
+----
+No such file or directory
+
+# ignore_errors must be a boolean.
+statement error
+SELECT * FROM read_mpfile('test/data/bad_rows.rpt', ignore_errors='maybe');
+----
