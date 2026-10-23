@@ -83,7 +83,10 @@ def sh(sql, threads=None, timed=False):
         se.seek(0)
         so.seek(0)
         err, out = se.read().decode(errors="replace"), so.read().decode(errors="replace")
-    if os.waitstatus_to_exitcode(status):
+    rc = os.waitstatus_to_exitcode(status)
+    if rc == -9:  # SIGKILL: almost certainly the OOM killer; record it as a result rather than aborting the matrix
+        return int(ru.ru_maxrss) // 1024, wall, ru.ru_utime + ru.ru_stime, "OOM-KILLED"
+    if rc:
         sys.exit(f"duckdb failed: {err[:500]}\n{sql[:300]}")
     return int(ru.ru_maxrss) // 1024, wall, ru.ru_utime + ru.ru_stime, out.strip().splitlines()[-1][:60]
 
@@ -153,7 +156,10 @@ for name in DATASETS:
                 wall = min(r[1] for r in runs)
                 cpu = min(r[2] for r in runs)
                 rss = int(statistics.median(r[0] for r in runs))
-                row.append(f"{wall:6.2f} / {cpu:6.2f} / {rss:5d}")
+                if any(r[3] == "OOM-KILLED" for r in runs):
+                    row.append(f"OOM @ {max(r[0] for r in runs)}MB/{wall:.0f}s")
+                else:
+                    row.append(f"{wall:6.2f} / {cpu:6.2f} / {rss:5d}")
                 results.append(dict(dataset=name, query=q, threads=int(th), source=s, wall=wall, cpu=cpu, rss_mb=rss,
                                     result=runs[0][3], size_mb=size))
             print(f"{q:<12}{th:>4}  " + "".join(f"{x:>26}" for x in row), flush=True)
