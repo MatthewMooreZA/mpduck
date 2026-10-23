@@ -8,7 +8,7 @@ with skip=3 (2 KV rows + VARIABLE_TYPES) and the '!' row as header. Two baseline
   csv_typed  - same plus explicit dtypes identical to what read_mpfile derives from VARIABLE_TYPES
 
 Each measurement is a fresh DuckDB process (so peak RSS is attributable to one query); wall = best of RUNS,
-rss = median of RUNS (from /usr/bin/time -f '%M').
+rss = median of RUNS (ru_maxrss from wait4).
 
 Usage: bench/perf_matrix.py [--duckdb PATH] [--dir DIR] [--runs N] [--threads "1 4"] [--only name,name] [--json OUT]
 """
@@ -16,6 +16,7 @@ import argparse, json, os, statistics, subprocess, sys, tempfile
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--duckdb", default="./build/release/duckdb")
+ap.add_argument("--ext", default="build/release/extension/mpduck/mpduck.duckdb_extension")
 ap.add_argument("--dir", default="/tmp/mpduck-perf")
 ap.add_argument("--runs", type=int, default=3)
 ap.add_argument("--threads", default="1 4")
@@ -66,20 +67,25 @@ SKIP_QUERIES = {"files_100x100mb": {"materialize"}}
 
 
 def sh(sql, threads=None, timed=False):
-    pre = f"SET threads={threads}; " if threads else ""
-    cmd = [a.duckdb, "-csv", "-noheader", "-c", pre + sql]
+    pre = f"LOAD '{a.ext}'; " + (f"SET threads={threads}; " if threads else "")
+    cmd = [a.duckdb, "-unsigned", "-csv", "-noheader", "-c", pre + sql]
     if not timed:
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode:
             sys.exit(f"duckdb failed: {r.stderr[:500]}\n{sql[:300]}")
         return r.stdout
-    tf = tempfile.mktemp()
-    r = subprocess.run(["/usr/bin/time", "-f", "%M %e %U %S", "-o", tf] + cmd, capture_output=True, text=True)
-    if r.returncode:
-        sys.exit(f"duckdb failed: {r.stderr[:500]}\n{sql[:300]}")
-    kb, wall, user, sysu = open(tf).read().split()[-4:]
-    os.unlink(tf)
-    return int(kb) // 1024, float(wall), float(user) + float(sysu), r.stdout.strip().splitlines()[-1][:60]
+    import time
+    with tempfile.TemporaryFile() as so, tempfile.TemporaryFile() as se:
+        t0 = time.time()
+        p = subprocess.Popen(cmd, stdout=so, stderr=se)
+        _, status, ru = os.wait4(p.pid, 0)
+        wall = time.time() - t0
+        se.seek(0)
+        so.seek(0)
+        err, out = se.read().decode(errors="replace"), so.read().decode(errors="replace")
+    if os.waitstatus_to_exitcode(status):
+        sys.exit(f"duckdb failed: {err[:500]}\n{sql[:300]}")
+    return int(ru.ru_maxrss) // 1024, wall, ru.ru_utime + ru.ru_stime, out.strip().splitlines()[-1][:60]
 
 
 def gen(name):
