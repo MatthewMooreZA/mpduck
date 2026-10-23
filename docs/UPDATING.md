@@ -4,12 +4,13 @@ will inevitably come a time when a new DuckDB is released and the extension repo
 as follows:
 
 - Bump submodules
-  - `./duckdb` should be set to latest tagged release
-  - `./extension-ci-tools` should be set to updated branch corresponding to latest DuckDB release. So if you're building for DuckDB `v1.1.0` there will be a branch in `extension-ci-tools` named `v1.1.0` to which you should check out. 
+  - `./duckdb` should be set to latest tagged release (currently `v2.0.0`)
+  - `./extension-ci-tools` tracks `main`. Use a branch named after the DuckDB release only if one exists for it
+    (there is none for 2.0.0 yet, and the pre-release `v2.0-cyanoptera` branch is not the one to use).
 - Bump versions in `./.github/workflows/MainDistributionPipeline.yml`
-  - `duckdb_version` and `ci_tools_version` inputs in the `duckdb-stable-build` job should be set to latest tagged release
-  - `duckdb_version` and `ci_tools_version` inputs in the `code-quality-check` job should be set to latest tagged release
-  - the `@vX.Y.Z` ref on the reusable workflows (`_extension_distribution.yml` and `_extension_code_quality.yml`) should be set to latest tagged release
+  - `duckdb_version` in the `duckdb-stable-build` and `code-quality-check` jobs should be set to latest tagged release
+  - `duckdb-1-5-build` keeps building the 1.5.x line from the same source; its `duckdb_version`, `ci_tools_version`
+    and `@vX.Y.Z` ref move together with the latest 1.5 patch release
   - the `duckdb-next-build` job intentionally tracks DuckDB `main` (non-blocking) to give early warning of API breakage; leave it alone
 
 # Supporting more than one DuckDB version
