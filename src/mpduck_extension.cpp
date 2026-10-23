@@ -236,16 +236,16 @@ static void LoadInternal(ExtensionLoader &loader) {
 	TableFunction read_mpfile("read_mpfile", {LogicalType::VARCHAR}, nullptr, nullptr);
 	read_mpfile.bind_replace = ReadMPFileBindReplace;
 	MPAddNamedParameters(read_mpfile, {{"filename", LogicalType::ANY},
-	                          {"union_by_name", LogicalType::BOOLEAN},
-	                          {"ignore_errors", LogicalType::BOOLEAN}});
+	                                   {"union_by_name", LogicalType::BOOLEAN},
+	                                   {"ignore_errors", LogicalType::BOOLEAN}});
 	loader.RegisterFunction(read_mpfile);
 
 	// List overload: SELECT * FROM read_mpfile(['file1.rpt', 'glob_*.rpt', ...])
 	TableFunction read_mpfile_list("read_mpfile", {LogicalType::LIST(LogicalType::VARCHAR)}, nullptr, nullptr);
 	read_mpfile_list.bind_replace = ReadMPFileListBindReplace;
 	MPAddNamedParameters(read_mpfile_list, {{"filename", LogicalType::ANY},
-	                          {"union_by_name", LogicalType::BOOLEAN},
-	                          {"ignore_errors", LogicalType::BOOLEAN}});
+	                                        {"union_by_name", LogicalType::BOOLEAN},
+	                                        {"ignore_errors", LogicalType::BOOLEAN}});
 	loader.RegisterFunction(read_mpfile_list);
 
 	// Implicit scan: SELECT * FROM 'file.rpt'

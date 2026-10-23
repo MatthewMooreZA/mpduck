@@ -5,13 +5,13 @@ as follows:
 
 - Bump submodules
   - `./duckdb` should be set to latest tagged release (currently `v2.0.0`)
-  - `./extension-ci-tools` tracks `main`. Use a branch named after the DuckDB release only if one exists for it
-    (there is none for 2.0.0 yet, and the pre-release `v2.0-cyanoptera` branch is not the one to use).
+  - `./extension-ci-tools` tracks `main`; the workflow itself uses the `v2.0-cyanoptera` branch of extension-ci-tools
 - Bump versions in `./.github/workflows/MainDistributionPipeline.yml`
   - `duckdb_version` in the `duckdb-stable-build` and `code-quality-check` jobs should be set to latest tagged release
   - `duckdb-1-5-build` keeps building the 1.5.x line from the same source; its `duckdb_version`, `ci_tools_version`
     and `@vX.Y.Z` ref move together with the latest 1.5 patch release
-  - the `duckdb-next-build` job intentionally tracks DuckDB `main` (non-blocking) to give early warning of API breakage; leave it alone
+  - the `duckdb-stable-build` and `code-quality-check` jobs (and their `ci_tools_version`) use `v2.0-cyanoptera`, as in
+    duckdb/extension-template; move them to a release-named branch once one exists for 2.0.x
 
 # Supporting more than one DuckDB version
 mpduck builds against DuckDB 1.5.x and 2.0 from the same source. Differences in DuckDB's internal C++ API are isolated
@@ -20,7 +20,7 @@ in `src/include/mpduck_compat.hpp` (see the comment at the top of that file). Wh
 - If the break is a rename or a type change, add a helper to `mpduck_compat.hpp` with one implementation per version
   and call it from the sources, rather than sprinkling `#if` around.
 - To try a new DuckDB, point the `duckdb` submodule at it (or use a `git worktree`, so the existing build is kept)
-  and build. The `duckdb-next-build` CI job does the same against DuckDB `main`.
+  and build.
 - Once an old version is no longer supported, delete its half of the `#if` in the compat header.
 
 # API changes
