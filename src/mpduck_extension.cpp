@@ -235,17 +235,17 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// Explicit table function: SELECT * FROM read_mpfile('file.rpt')
 	TableFunction read_mpfile("read_mpfile", {LogicalType::VARCHAR}, nullptr, nullptr);
 	read_mpfile.bind_replace = ReadMPFileBindReplace;
-	read_mpfile.named_parameters["filename"] = LogicalType::ANY;
-	read_mpfile.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
-	read_mpfile.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	MPAddNamedParameters(read_mpfile, {{"filename", LogicalType::ANY},
+	                          {"union_by_name", LogicalType::BOOLEAN},
+	                          {"ignore_errors", LogicalType::BOOLEAN}});
 	loader.RegisterFunction(read_mpfile);
 
 	// List overload: SELECT * FROM read_mpfile(['file1.rpt', 'glob_*.rpt', ...])
 	TableFunction read_mpfile_list("read_mpfile", {LogicalType::LIST(LogicalType::VARCHAR)}, nullptr, nullptr);
 	read_mpfile_list.bind_replace = ReadMPFileListBindReplace;
-	read_mpfile_list.named_parameters["filename"] = LogicalType::ANY;
-	read_mpfile_list.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
-	read_mpfile_list.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	MPAddNamedParameters(read_mpfile_list, {{"filename", LogicalType::ANY},
+	                          {"union_by_name", LogicalType::BOOLEAN},
+	                          {"ignore_errors", LogicalType::BOOLEAN}});
 	loader.RegisterFunction(read_mpfile_list);
 
 	// Implicit scan: SELECT * FROM 'file.rpt'

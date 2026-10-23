@@ -9,6 +9,7 @@
 //   - 2.0 deleted ConstantExpression(const Value &) in favour of ConstantExpression::FromValue.
 //   - 2.0 made StarExpression::exclude_list private (ExcludeListMutable()).
 //   - 2.0 replaced Vector::Flatten(count) with Flatten().
+//   - 2.0.0 removed TableFunction::named_parameters; named parameters are typed kwargs on the function signature.
 //
 // The switch is the presence of duckdb/common/identifier.hpp, which only exists from 2.0.
 
@@ -42,6 +43,13 @@ inline void MPExcludeColumn(StarExpression &star, const string &column) {
 inline void MPFlatten(Vector &vector, idx_t) {
 	vector.Flatten();
 }
+inline void MPAddNamedParameters(TableFunction &function, const vector<pair<string, LogicalType>> &parameters) {
+	function.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &kwargs) {
+		for (auto &parameter : parameters) {
+			kwargs.Add(Identifier(parameter.first), parameter.second);
+		}
+	});
+}
 
 #else
 
@@ -61,6 +69,11 @@ inline void MPExcludeColumn(StarExpression &star, const string &column) {
 }
 inline void MPFlatten(Vector &vector, idx_t count) {
 	vector.Flatten(count);
+}
+inline void MPAddNamedParameters(TableFunction &function, const vector<pair<string, LogicalType>> &parameters) {
+	for (auto &parameter : parameters) {
+		function.named_parameters[parameter.first] = parameter.second;
+	}
 }
 
 #endif
