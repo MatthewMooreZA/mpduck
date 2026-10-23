@@ -58,7 +58,11 @@ DATASETS = {
     "strings_1m":   (1_000_000, STRINGS, 1, False),
     "sparse_1m":    (1_000_000, SPARSE, 1, False),
     "files_500x2k": (2_000, NARROW, 500, False),
+    # ~100 MB per file (8 narrow cols, ~58 bytes/row): 100 files, ~10 GB total. Check the printed size.
+    "files_100x100mb": (1_800_000, NARROW, 100, False),
 }
+# Queries skipped per dataset: materialising ~180M rows would exceed RAM.
+SKIP_QUERIES = {"files_100x100mb": {"materialize"}}
 
 
 def sh(sql, threads=None, timed=False):
@@ -134,6 +138,8 @@ for name in DATASETS:
     print(f"{'query':<12}{'thr':>4}  " + "".join(f"{s:>26}" for s in sources), flush=True)
     print(f"{'':<12}{'':>4}  " + "".join(f"{'wall_s / cpu_s / rssMB':>26}" for _ in sources), flush=True)
     for q, tmpl in qs.items():
+        if q in SKIP_QUERIES.get(name, ()):
+            continue
         for th in a.threads.split():
             row = []
             for s, src in sources.items():
