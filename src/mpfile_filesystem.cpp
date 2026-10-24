@@ -133,6 +133,14 @@ static string MapMPType(const string &mp_type, size_t col_idx) {
 	throw IOException("Unknown mpfile type specifier '%s' at column %llu", mp_type, (unsigned long long)col_idx);
 }
 
+bool IsZeroByteMPFile(const string &path, FileSystem &fs) {
+	// The bypass makes this the raw file size rather than the size of the filtered stream MPFileSystem would serve.
+	// As in ParseMPFileSchema, open errors propagate so an unreadable file is never mistaken for an empty one.
+	ScopedMPFSBypass bypass;
+	auto handle = fs.OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
+	return fs.GetFileSize(*handle) == 0;
+}
+
 MPFileSchema ParseMPFileSchema(const string &path, FileSystem &fs) {
 	MPFileSchema schema;
 

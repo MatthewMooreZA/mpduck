@@ -27,6 +27,8 @@ struct MPReadOptions {
 	bool union_by_name = false;
 	//! Skip rows that fail to parse instead of raising an error.
 	bool ignore_errors = false;
+	//! Drop zero-byte files from a glob or list before they are read, instead of letting them fail the scan.
+	bool skip_empty_files = true;
 	//! When non-null, forwarded as the filename= parameter (true, or the name of the column to add).
 	unique_ptr<Value> filename;
 };
@@ -97,10 +99,13 @@ static unique_ptr<TableRef> MakeReadCSVRef(const string &path, const MPFileSchem
 	return MakeReadCSVRefFromPaths({path}, schema, std::move(options));
 }
 
-//! Read a BOOLEAN named parameter. Absent or NULL means false, like read_csv.
-static bool ExtractBool(TableFunctionBindInput &input, const string &name) {
+//! Read a BOOLEAN named parameter. Absent or NULL means `default_value`.
+static bool ExtractBool(TableFunctionBindInput &input, const string &name, bool default_value = false) {
 	auto it = input.named_parameters.find(MPMakeName(name));
-	return it != input.named_parameters.end() && !it->second.IsNull() && it->second.GetValue<bool>();
+	if (it == input.named_parameters.end() || it->second.IsNull()) {
+		return default_value;
+	}
+	return it->second.GetValue<bool>();
 }
 
 //! Collect the named parameters that are forwarded to read_csv_auto.
@@ -108,6 +113,7 @@ static MPReadOptions ExtractReadOptions(TableFunctionBindInput &input) {
 	MPReadOptions options;
 	options.union_by_name = ExtractBool(input, "union_by_name");
 	options.ignore_errors = ExtractBool(input, "ignore_errors");
+	options.skip_empty_files = ExtractBool(input, "skip_empty_files", true);
 	auto it = input.named_parameters.find("filename");
 	if (it != input.named_parameters.end()) {
 		options.filename = make_uniq<Value>(it->second);
@@ -132,6 +138,9 @@ static vector<string> ExpandEntries(FileSystem &fs, const vector<string> &entrie
 
 //! Shared by the glob and list forms of read_mpfile. Files are never combined by name unless asked to.
 //!
+//! skip_empty_files = true (default): zero-byte files among the expanded paths are dropped first, at the cost of one
+//! open and size lookup per file. Files that are not empty but have no header row are not covered; see below.
+//!
 //! union_by_name = false (default): the entries are only expanded. The schema for the dtypes parameter comes from
 //! the first matched file that has data; every other file is left for read_csv_auto to open lazily, so bind
 //! cost does not grow with the number of files (which matters most on remote storage). All files must have the
@@ -143,6 +152,16 @@ static vector<string> ExpandEntries(FileSystem &fs, const vector<string> &entrie
 static unique_ptr<TableRef> ReadMPFileMultiRef(FileSystem &fs, const vector<string> &entries, MPReadOptions options,
                                                const string &no_match_message) {
 	auto paths = ExpandEntries(fs, entries);
+
+	if (options.skip_empty_files) {
+		vector<string> non_empty;
+		for (auto &path : paths) {
+			if (!IsZeroByteMPFile(path, fs)) {
+				non_empty.push_back(std::move(path));
+			}
+		}
+		paths = std::move(non_empty);
+	}
 
 	if (!options.union_by_name) {
 		MPFileSchema schema;
@@ -236,16 +255,18 @@ static void LoadInternal(ExtensionLoader &loader) {
 	TableFunction read_mpfile("read_mpfile", {LogicalType::VARCHAR}, nullptr, nullptr);
 	read_mpfile.bind_replace = ReadMPFileBindReplace;
 	MPAddNamedParameters(read_mpfile, {{"filename", LogicalType::ANY},
-	                          {"union_by_name", LogicalType::BOOLEAN},
-	                          {"ignore_errors", LogicalType::BOOLEAN}});
+	                                   {"union_by_name", LogicalType::BOOLEAN},
+	                                   {"ignore_errors", LogicalType::BOOLEAN},
+	                                   {"skip_empty_files", LogicalType::BOOLEAN}});
 	loader.RegisterFunction(read_mpfile);
 
 	// List overload: SELECT * FROM read_mpfile(['file1.rpt', 'glob_*.rpt', ...])
 	TableFunction read_mpfile_list("read_mpfile", {LogicalType::LIST(LogicalType::VARCHAR)}, nullptr, nullptr);
 	read_mpfile_list.bind_replace = ReadMPFileListBindReplace;
 	MPAddNamedParameters(read_mpfile_list, {{"filename", LogicalType::ANY},
-	                          {"union_by_name", LogicalType::BOOLEAN},
-	                          {"ignore_errors", LogicalType::BOOLEAN}});
+	                                        {"union_by_name", LogicalType::BOOLEAN},
+	                                        {"ignore_errors", LogicalType::BOOLEAN},
+	                                        {"skip_empty_files", LogicalType::BOOLEAN}});
 	loader.RegisterFunction(read_mpfile_list);
 
 	// Implicit scan: SELECT * FROM 'file.rpt'

@@ -616,11 +616,93 @@ SELECT NAME, AGE FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt
 Alice	30
 Bob	25
 
-# Without union_by_name, files with no data are not filtered out: they fail like they would in read_csv.
-statement error
+# skip_empty_files (default true) drops zero-byte files from a list or glob before reading. It is exercised with
+# the empty file first and not first, with union_by_name both false and true.
+query T rowsort
 SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt']);
 ----
+Alice
+
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/empty.rpt', 'test/data/glob_a.rpt']);
+----
+Alice
+
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt'], union_by_name=true);
+----
+Alice
+
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/empty.rpt', 'test/data/glob_a.rpt'], union_by_name=true);
+----
+Alice
+
+# Empty files between and around files with data.
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/skip_empty/b_data.rpt', 'test/data/empty.rpt', 'test/data/skip_empty/d_data.rpt']);
+----
+Alice
+Dave
+
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/empty.rpt', 'test/data/skip_empty/b_data.rpt', 'test/data/skip_empty/c_empty.rpt', 'test/data/skip_empty/d_data.rpt'], union_by_name=true);
+----
+Alice
+Dave
+
+# Globs: a_empty.rpt and c_empty.rpt are empty, b_data.rpt and d_data.rpt have data.
+query T rowsort
+SELECT NAME FROM read_mpfile('test/data/skip_empty/*.rpt');
+----
+Alice
+Dave
+
+query T rowsort
+SELECT NAME FROM read_mpfile('test/data/skip_empty/*.rpt', union_by_name=true);
+----
+Alice
+Dave
+
+query T rowsort
+SELECT NAME FROM 'test/data/skip_empty/*.rpt';
+----
+Alice
+Dave
+
+# skip_empty_files=false restores the failure without union_by_name, whether the empty file is first or not:
+# the first file with data supplies the schema and the empty file then fails when it is read.
+statement error
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt'], skip_empty_files=false);
+----
 do not exist in the CSV File
+
+statement error
+SELECT NAME FROM read_mpfile(['test/data/empty.rpt', 'test/data/glob_a.rpt'], skip_empty_files=false);
+----
+do not exist in the CSV File
+
+# With union_by_name=true the header check drops empty files whatever skip_empty_files says.
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt'], union_by_name=true, skip_empty_files=false);
+----
+Alice
+
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/empty.rpt', 'test/data/glob_a.rpt'], union_by_name=true, skip_empty_files=false);
+----
+Alice
+
+# A non-empty file with no header row is not covered by skip_empty_files.
+statement error
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/no_columns.rpt']);
+----
+do not exist in the CSV File
+
+# skip_empty_files must be a boolean.
+statement error
+SELECT * FROM read_mpfile('test/data/glob_a.rpt', skip_empty_files='maybe');
+----
 
 # A missing file is an error rather than being silently dropped.
 statement error

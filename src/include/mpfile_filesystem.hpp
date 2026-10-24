@@ -18,6 +18,10 @@ struct MPFileSchema {
 //! (column_names.size() < 2), which callers treat as "no data".
 MPFileSchema ParseMPFileSchema(const string &path, FileSystem &fs);
 
+//! True if the file at `path` is exactly zero bytes. Costs one open and size lookup, and does not read any content.
+//! Throws if the file cannot be opened.
+bool IsZeroByteMPFile(const string &path, FileSystem &fs);
+
 //! Merge a collection of schemas into one, widening types where they differ.
 //! Numeric widening order: SMALLINT < INTEGER < DOUBLE. Any non-numeric mismatch
 //! falls back to VARCHAR. Columns present in only some files are included as-is.
