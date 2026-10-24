@@ -626,7 +626,7 @@ do not exist in the CSV File
 statement error
 SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/does_not_exist.rpt']);
 ----
-No such file or directory
+does_not_exist.rpt
 
 # Input with no file that has any data is still an error with a clear message.
 statement error
