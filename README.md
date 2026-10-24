@@ -9,6 +9,12 @@ INSTALL mpduck FROM community;
 LOAD mpduck;
 ```
 
+## Versions
+
+mpduck follows [semantic versioning](https://semver.org). The mpduck version is independent of the DuckDB version:
+the same source builds against DuckDB 2.0 and DuckDB 1.5.x (CI builds v2.0.0 and v1.5.6), and an extension binary
+has to match the DuckDB version it is loaded into.
+
 ## Reading files
 
 Reference a `.rpt`, `.prn`, or `.fac` file directly in a `FROM` clause:
@@ -33,12 +39,12 @@ SELECT * FROM read_mpfile(['region_a*.rpt', 'region_b*.rpt']);
 
 ### union_by_name
 
-> **Breaking change in mpduck 2.0.** Versions before 2.0 always combined multiple files as if
-> `union_by_name = true`. From 2.0, `read_mpfile` takes a `union_by_name` parameter that **defaults to `false`**,
+> **Breaking change in mpduck 1.0.** Versions before 1.0 always combined multiple files as if
+> `union_by_name = true`. From 1.0, `read_mpfile` takes a `union_by_name` parameter that **defaults to `false`**,
 > matching `read_csv`, so reads that relied on the old behaviour now need `union_by_name = true`.
-> See [Upgrading to mpduck 2.0](#upgrading-to-mpduck-20).
+> See [Upgrading to mpduck 1.0](#upgrading-to-mpduck-10).
 
-Like `read_csv`, `read_mpfile` takes `union_by_name` (from mpduck 2.0), which defaults to `false`.
+Like `read_csv`, `read_mpfile` takes `union_by_name` (from mpduck 1.0), which defaults to `false`.
 
 - **`false` (default):** the files are expected to have the same columns. The column types come from the
   `VARIABLE_TYPES` row of the first file that has data, and the remaining files are opened lazily by the scan, so
@@ -57,11 +63,11 @@ SELECT * FROM read_mpfile('data/*.rpt', union_by_name = true);
 
 `FROM 'data/*.rpt'` behaves like the default (`union_by_name = false`).
 
-#### Upgrading to mpduck 2.0
+#### Upgrading to mpduck 1.0
 
-When moving from a version before 2.0, add `union_by_name = true` if a multi-file read (a glob, or a list of files) does any of these:
+When moving from a version before 1.0, add `union_by_name = true` if a multi-file read (a glob, or a list of files) does any of these:
 
-| Your files | Before 2.0 | 2.0, by default | To keep the old behaviour |
+| Your files | Before 1.0 | 1.0, by default | To keep the old behaviour |
 |---|---|---|---|
 | have different columns | combined by name, missing columns `NULL` | error: `COLUMN_TYPES error: Columns with names ... do not exist in the CSV File` | `union_by_name = true` |
 | have the same columns with different types (e.g. `SMALLINT` in one, `INTEGER` in another) | types widened | types taken from the first file that has data (a value that does not fit is an error) | `union_by_name = true` |
@@ -70,12 +76,18 @@ When moving from a version before 2.0, add `union_by_name = true` if a multi-fil
 
 Reads of a single file, and of several files that share the same columns and types, are unaffected.
 
-One further change in 2.0 applies in both modes: an unreadable file (for example a missing path, or a permission or
-credentials error) used to be silently dropped from a multi-file read, returning partial results. It is now an error.
+Two further changes in 1.0 apply in both modes:
+
+- An unreadable file (for example a missing path, or a permission or credentials error) used to be silently dropped
+  from a multi-file read, returning partial results. It is now an error.
+- The CSV dialect is no longer sniffed. `read_mpfile` now reads with `delim = ','`, `quote = '"'` and
+  `escape = '"'`, which is faster (see [delim, quote, escape and new_line](#delim-quote-escape-and-new_line)). A file
+  that uses a different quote or escape character, which the sniffer used to detect, needs `quote` and `escape` passed
+  explicitly. Line endings are still detected.
 
 ### ignore_errors
 
-*Available from mpduck 2.0.* Like `read_csv`, `read_mpfile` takes `ignore_errors`, which defaults to `false`. When
+*Available from mpduck 1.0.* Like `read_csv`, `read_mpfile` takes `ignore_errors`, which defaults to `false`. When
 it is `true`, rows that fail to parse (for example a non-numeric value in a `S`, `I` or `N` column) are skipped
 instead of raising an error.
 
