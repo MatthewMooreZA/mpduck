@@ -87,6 +87,28 @@ It behaves exactly as it does in `read_csv`: it skips rows, not files, so a file
 error, and only the columns a query actually reads are converted, so a bad value in a column the query does not
 use does not drop the row.
 
+### delim, quote, escape and new_line
+
+`read_mpfile` tells `read_csv` the dialect of an mpfile instead of making it sniff one. The defaults are what
+Prophet writes: `delim = ','`, `quote = '"'`, `escape = '"'` and `new_line = '\r\n'` (CRLF). Each can be overridden
+with the parameter of the same name that `read_csv` takes (`sep` is an alias for `delim`; give one or the other):
+
+```sql
+SELECT * FROM read_mpfile('model_points.rpt', quote = '''', escape = '''');
+SELECT * FROM read_mpfile('lf_endings.rpt', new_line = '\n');
+```
+
+`new_line` takes `read_csv`'s spelling: the text `\r\n`, `\n` or `\r`, not the control characters.
+
+> **Files with LF line endings need `new_line = '\n'`.** Before these defaults existed the line ending was sniffed,
+> so LF files read without options. They now fail with a CSV dialect error unless `new_line = '\n'` is passed.
+
+`delim` (and `sep`) are accepted for parity with `read_csv`, but only `','` is valid: the header (`!`) rows are
+split and rebuilt on commas, so any other delimiter is rejected with an error.
+
+Pinning the dialect also makes reads faster, most of all for wide files and for globs of many files, because the
+CSV sniffer no longer has to search for it (and, with `dtypes`, repeat that search for every file in a glob).
+
 ## Writing files
 
 ```sql
