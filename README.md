@@ -44,7 +44,7 @@ SELECT * FROM read_mpfile(['region_a*.rpt', 'region_b*.rpt']);
 > matching `read_csv`, so reads that relied on the old behaviour now need `union_by_name = true`.
 > See [Upgrading to mpduck 1.0](#upgrading-to-mpduck-10).
 
-Like `read_csv`, `read_mpfile` takes `union_by_name` (from mpduck 1.0), which defaults to `false`.
+Like `read_csv`, `read_mpfile` takes `union_by_name`, which defaults to `false`.
 
 - **`false` (default):** the files are expected to have the same columns. The column types come from the
   `VARIABLE_TYPES` row of the first file that has data, and the remaining files are opened lazily by the scan, so
@@ -89,7 +89,7 @@ Two further changes in 1.0 apply in both modes:
 
 ### ignore_errors
 
-*Available from mpduck 1.0.* Like `read_csv`, `read_mpfile` takes `ignore_errors`, which defaults to `false`. When
+Like `read_csv`, `read_mpfile` takes `ignore_errors`, which defaults to `false`. When
 it is `true`, rows that fail to parse (for example a non-numeric value in a `S`, `I` or `N` column) are skipped
 instead of raising an error.
 
