@@ -626,7 +626,7 @@ do not exist in the CSV File
 statement error
 SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/does_not_exist.rpt']);
 ----
-No such file or directory
+does_not_exist.rpt
 
 # Input with no file that has any data is still an error with a clear message.
 statement error
@@ -643,17 +643,17 @@ SELECT * FROM read_mpfile('test/data/glob_a.rpt', union_by_name='maybe');
 statement error
 SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/does_not_exist.rpt'], union_by_name=true);
 ----
-No such file or directory
+does_not_exist.rpt
 
 statement error
 SELECT NAME FROM read_mpfile('test/data/does_not_exist.rpt');
 ----
-No such file or directory
+does_not_exist.rpt
 
 statement error
 SELECT * FROM 'test/data/does_not_exist.rpt';
 ----
-No such file or directory
+does_not_exist.rpt
 
 # The implicit FROM 'glob' scan expands the glob and takes column types from VARIABLE_TYPES.
 query II
@@ -737,7 +737,7 @@ Dave	60.5	bad_rows.rpt
 statement error
 SELECT NAME FROM read_mpfile(['test/data/bad_rows.rpt', 'test/data/does_not_exist.rpt'], ignore_errors=true);
 ----
-No such file or directory
+does_not_exist.rpt
 
 # ignore_errors must be a boolean.
 statement error
