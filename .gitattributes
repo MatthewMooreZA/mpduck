@@ -1,0 +1,6 @@
+# Test fixtures and mpfiles depend on their exact line endings (most are CRLF, a few are deliberately LF), so never
+# let Git convert them, whatever core.autocrlf is set to on the machine doing the checkout.
+test/data/** -text
+*.rpt -text
+*.prn -text
+*.fac -text

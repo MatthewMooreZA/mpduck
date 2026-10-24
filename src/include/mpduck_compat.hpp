@@ -11,13 +11,14 @@
 //   - 2.0 replaced Vector::Flatten(count) with Flatten().
 //   - 2.0.0 removed TableFunction::named_parameters; named parameters are typed kwargs on the function signature.
 //
-// The switch is the presence of duckdb/common/identifier.hpp, which only exists from 2.0.
+// The switch is the presence of duckdb/common/enums/identifier_case_mode.hpp, which only exists from 2.0.
+// (identifier.hpp is not usable for this: 1.5 already ships it, but its COPY and expression APIs still take string.)
 
 #include "duckdb.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/star_expression.hpp"
 
-#if __has_include("duckdb/common/identifier.hpp")
+#if __has_include("duckdb/common/enums/identifier_case_mode.hpp")
 #define MPDUCK_DUCKDB_V2 1
 #endif
 
