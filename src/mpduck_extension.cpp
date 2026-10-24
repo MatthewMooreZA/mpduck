@@ -29,6 +29,14 @@ struct MPReadOptions {
 	bool ignore_errors = false;
 	//! When non-null, forwarded as the filename= parameter (true, or the name of the column to add).
 	unique_ptr<Value> filename;
+	//! Dialect of the stream MPFileSystem hands to read_csv_auto. Always forwarded, so the sniffer does not have to
+	//! enumerate and re-scan delimiter/quote/escape candidates.
+	string delim = ",";
+	string quote = "\"";
+	string escape = "\"";
+	//! Forwarded only when set: the line ending is cheap to detect, and files may use LF or CRLF. Uses read_csv's
+	//! syntax: the text \r\n (backslash, r, backslash, n), not the control characters.
+	unique_ptr<Value> new_line;
 };
 
 //! Build a read_csv_auto ref for the given list of paths, wrapped in SELECT * EXCLUDE ("!").
@@ -67,6 +75,18 @@ static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths,
 		children.push_back(std::move(dtypes_expr));
 	}
 
+	for (const auto &dialect_option : {std::make_pair("delim", &options.delim), std::make_pair("quote", &options.quote),
+	                                   std::make_pair("escape", &options.escape)}) {
+		auto expr = MPConstant(Value(*dialect_option.second));
+		expr->SetAlias(dialect_option.first);
+		children.push_back(std::move(expr));
+	}
+	if (options.new_line) {
+		auto new_line_expr = MPConstant(*options.new_line);
+		new_line_expr->SetAlias("new_line");
+		children.push_back(std::move(new_line_expr));
+	}
+
 	if (options.filename) {
 		auto filename_expr = MPConstant(*options.filename);
 		filename_expr->SetAlias("filename");
@@ -103,11 +123,36 @@ static bool ExtractBool(TableFunctionBindInput &input, const string &name) {
 	return it != input.named_parameters.end() && !it->second.IsNull() && it->second.GetValue<bool>();
 }
 
+//! Read a VARCHAR named parameter into target. Absent or NULL leaves the default in place; returns whether it was set.
+static bool ExtractString(TableFunctionBindInput &input, const string &name, string &target) {
+	auto it = input.named_parameters.find(MPMakeName(name));
+	if (it == input.named_parameters.end() || it->second.IsNull()) {
+		return false;
+	}
+	target = it->second.GetValue<string>();
+	return true;
+}
+
 //! Collect the named parameters that are forwarded to read_csv_auto.
 static MPReadOptions ExtractReadOptions(TableFunctionBindInput &input) {
 	MPReadOptions options;
 	options.union_by_name = ExtractBool(input, "union_by_name");
 	options.ignore_errors = ExtractBool(input, "ignore_errors");
+	// delim and sep are read_csv's two spellings of one option
+	if (ExtractString(input, "delim", options.delim) && ExtractString(input, "sep", options.delim)) {
+		throw InvalidInputException("read_mpfile: specify only one of delim and sep");
+	}
+	ExtractString(input, "sep", options.delim);
+	if (options.delim != ",") {
+		// MPFileSystem splits and rebuilds the header rows on commas, so another delimiter cannot work
+		throw InvalidInputException("read_mpfile: delim must be ',', mpfile header rows are always comma-separated");
+	}
+	ExtractString(input, "quote", options.quote);
+	ExtractString(input, "escape", options.escape);
+	string new_line;
+	if (ExtractString(input, "new_line", new_line)) {
+		options.new_line = make_uniq<Value>(new_line);
+	}
 	auto it = input.named_parameters.find("filename");
 	if (it != input.named_parameters.end()) {
 		options.filename = make_uniq<Value>(it->second);
@@ -226,6 +271,14 @@ static unique_ptr<TableRef> ReadMPFileListBindReplace(ClientContext &context, Ta
 	                          "read_mpfile: no files matched the provided paths");
 }
 
+//! The named parameters of both read_mpfile overloads.
+static vector<pair<string, LogicalType>> MPReadParameters() {
+	return {{"filename", LogicalType::ANY},          {"union_by_name", LogicalType::BOOLEAN},
+	        {"ignore_errors", LogicalType::BOOLEAN}, {"delim", LogicalType::VARCHAR},
+	        {"sep", LogicalType::VARCHAR},           {"quote", LogicalType::VARCHAR},
+	        {"escape", LogicalType::VARCHAR},        {"new_line", LogicalType::VARCHAR}};
+}
+
 static void LoadInternal(ExtensionLoader &loader) {
 	// Register the custom filesystem so .rpt and .prn file opens are intercepted
 	// and the mpfile format is transparently filtered before CSV parsing.
@@ -235,17 +288,13 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// Explicit table function: SELECT * FROM read_mpfile('file.rpt')
 	TableFunction read_mpfile("read_mpfile", {LogicalType::VARCHAR}, nullptr, nullptr);
 	read_mpfile.bind_replace = ReadMPFileBindReplace;
-	MPAddNamedParameters(read_mpfile, {{"filename", LogicalType::ANY},
-	                                   {"union_by_name", LogicalType::BOOLEAN},
-	                                   {"ignore_errors", LogicalType::BOOLEAN}});
+	MPAddNamedParameters(read_mpfile, MPReadParameters());
 	loader.RegisterFunction(read_mpfile);
 
 	// List overload: SELECT * FROM read_mpfile(['file1.rpt', 'glob_*.rpt', ...])
 	TableFunction read_mpfile_list("read_mpfile", {LogicalType::LIST(LogicalType::VARCHAR)}, nullptr, nullptr);
 	read_mpfile_list.bind_replace = ReadMPFileListBindReplace;
-	MPAddNamedParameters(read_mpfile_list, {{"filename", LogicalType::ANY},
-	                                        {"union_by_name", LogicalType::BOOLEAN},
-	                                        {"ignore_errors", LogicalType::BOOLEAN}});
+	MPAddNamedParameters(read_mpfile_list, MPReadParameters());
 	loader.RegisterFunction(read_mpfile_list);
 
 	// Implicit scan: SELECT * FROM 'file.rpt'

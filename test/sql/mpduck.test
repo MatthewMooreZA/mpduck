@@ -743,3 +743,83 @@ does_not_exist.rpt
 statement error
 SELECT * FROM read_mpfile('test/data/bad_rows.rpt', ignore_errors='maybe');
 ----
+
+# Dialect parameters: delim, quote, escape and new_line are forwarded to read_csv. The defaults are
+# delim=',', quote='"', escape='"' and new_line='\r\n', so a CRLF file with double-quoted strings needs no options.
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('test/data/crlf.rpt', delim=',', quote='"', escape='"', new_line='\r\n');
+----
+Alice	30
+Bob	25
+
+# The defaults apply to the replacement scan too.
+query TI rowsort
+SELECT NAME, AGE FROM 'test/data/crlf.rpt';
+----
+Alice	30
+Bob	25
+
+# Defaults do not understand single-quoted fields: the comma inside 'Smith, J' splits the row.
+statement error
+SELECT * FROM read_mpfile('test/data/quote_single.rpt');
+----
+
+# quote and escape override the defaults.
+query TI rowsort
+SELECT NAME, N FROM read_mpfile('test/data/quote_single.rpt', quote='''', escape='''');
+----
+O'Brien	2
+Smith, J	1
+
+# ... and work for the list form and for several files at once.
+query TI rowsort
+SELECT NAME, N FROM read_mpfile(['test/data/quote_single.rpt', 'test/data/quote_single.rpt'], quote='''', escape='''');
+----
+O'Brien	2
+O'Brien	2
+Smith, J	1
+Smith, J	1
+
+# sep is read_csv's alias for delim.
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('test/data/crlf.rpt', sep=',');
+----
+Alice	30
+Bob	25
+
+# delim and sep together are ambiguous.
+statement error
+SELECT * FROM read_mpfile('test/data/crlf.rpt', delim=',', sep=',');
+----
+specify only one of delim and sep
+
+# Only the comma delimiter works: MPFileSystem rebuilds the header rows on commas.
+statement error
+SELECT * FROM read_mpfile('test/data/crlf.rpt', delim=';');
+----
+delim must be ','
+
+# new_line is not pinned by default (LF and CRLF files both read); it can be given explicitly.
+query TIR rowsort
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/lf.rpt', new_line='\n');
+----
+Alice	30	98.5
+Bob	25	72.0
+
+# A new_line that does not match the file is an error.
+statement error
+SELECT * FROM read_mpfile('test/data/lf.rpt', new_line='\r\n');
+----
+
+# new_line is validated by read_csv.
+statement error
+SELECT * FROM read_mpfile('test/data/crlf.rpt', new_line='x');
+----
+This is not accepted as a newline
+
+# NULL leaves the default in place.
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('test/data/crlf.rpt', quote=NULL, new_line=NULL);
+----
+Alice	30
+Bob	25
