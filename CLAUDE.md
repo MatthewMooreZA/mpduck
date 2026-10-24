@@ -37,7 +37,7 @@ The extension is built against DuckDB's internal C++ API (not the stable C API).
 
 ## Testing
 
-Tests use DuckDB's SQLLogicTest format (`test/sql/mpduck.test`, fixtures in `test/data/`). The test file uses `require mpduck` to load the extension.
+Tests use DuckDB's SQLLogicTest format (`test/sql/mpduck.test`, fixtures in `test/data/`). The test file uses `require mpduck` to load the extension. The fixtures depend on their exact line endings (most are CRLF, `lf.rpt` and `schema.fac` are LF), so `.gitattributes` marks `test/data/**` and the mpfile extensions `-text`: keep it that way so a Windows checkout with `core.autocrlf` cannot rewrite them.
 
 ## Updating DuckDB version
 
