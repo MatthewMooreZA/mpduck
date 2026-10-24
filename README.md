@@ -133,7 +133,7 @@ sniffer no longer has to search for it. Measurements are in [`bench/RESULTS.md`]
 
 ### skip_empty_files
 
-*Available from mpduck 2.0.* `read_mpfile` takes `skip_empty_files`, which defaults to `true`. When it is `true`,
+`read_mpfile` takes `skip_empty_files`, which defaults to `true`. When it is `true`,
 zero-byte files in a glob or a list of files are dropped before anything is read, so one empty file does not fail
 the whole read. This applies with `union_by_name` either `false` or `true`, and to `FROM 'data/*.rpt'`.
 
