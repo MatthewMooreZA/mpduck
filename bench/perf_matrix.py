@@ -62,8 +62,14 @@ DATASETS = {
     # ~100 MB per file (8 narrow cols, ~58 bytes/row): 100 files, ~10 GB total. Check the printed size.
     "files_100x100mb": (1_800_000, NARROW, 100, False),
 }
+# Most real mpfiles carry no VARIABLE_TYPES row: every dataset gets a "<name>_notypes" twin written with
+# INCLUDE_TYPES false, where read_mpfile cannot pass dtypes and read_csv_auto sniffs the types.
+NOTYPES = set()
+for _n in list(DATASETS):
+    DATASETS[_n + "_notypes"] = DATASETS[_n]
+    NOTYPES.add(_n + "_notypes")
 # Queries skipped per dataset: materialising ~180M rows would exceed RAM.
-SKIP_QUERIES = {"files_100x100mb": {"materialize"}}
+SKIP_QUERIES = {"files_100x100mb": {"materialize"}, "files_100x100mb_notypes": {"materialize"}}
 
 
 def sh(sql, threads=None, timed=False):
@@ -101,7 +107,8 @@ def gen(name):
         for f in range(nfiles):
             out = os.path.join(d, f"f{f:04d}.rpt")
             sh(f"SET threads=4; COPY (SELECT {sel} FROM range({rows}) t(i)) TO '{out}' "
-               f"(FORMAT mpfile, KV_METADATA {{run: 'bench', version: '1'}});")
+               f"(FORMAT mpfile, KV_METADATA {{run: 'bench', version: '1'}}"
+               f"{', INCLUDE_TYPES false' if name in NOTYPES else ''});")
             os.symlink(out, os.path.join(d, f"f{f:04d}.txt"))
             if footer:
                 with open(out, "ab") as fh:
@@ -120,10 +127,12 @@ def queries(name):
     # only when there is none; for the footer case fall back to ignore_errors-free comparison on mpfile only.
     mp = f"read_mpfile('{d}/*.rpt')" if nfiles > 1 else f"read_mpfile('{d}/f0000.rpt')"
     csvp = f"'{d}/*.txt'" if nfiles > 1 else f"'{d}/f0000.txt'"
+    skip = SKIP - 1 if name in NOTYPES else SKIP  # no VARIABLE_TYPES row
     sources = {"mpfile": mp}
     if not footer:
-        sources["csv_auto"] = f"read_csv({csvp}, skip={SKIP}, header=true)"
-        sources["csv_typed"] = f"read_csv({csvp}, skip={SKIP}, header=true, dtypes={dt})"
+        sources["csv_auto"] = f"read_csv({csvp}, skip={skip}, header=true)"
+        if name not in NOTYPES:
+            sources["csv_typed"] = f"read_csv({csvp}, skip={skip}, header=true, dtypes={dt})"
     first, last = cols[0][0], cols[-1][0]
     agg_cols = ", ".join(f"sum(\"{n}\")" for n in num[:40]) + (f", max(length(\"{cols[0][0]}\"))" if cols[0][2] == "VARCHAR" else "")
     qs = {
