@@ -369,7 +369,7 @@ Carol	40
 
 # read_mpfile: .fac file is parsed as an mpfile
 query TIRTI rowsort
-SELECT NAME, AGE, SCORE, CODE, COUNT FROM read_mpfile('test/data/schema.fac', new_line='\n');
+SELECT NAME, AGE, SCORE, CODE, COUNT FROM read_mpfile('test/data/schema.fac');
 ----
 Alice	30	98.5	ABC123	7
 Bob	25	72.0	XYZ999	3
@@ -399,7 +399,7 @@ SELECT COUNT(*) FROM read_mpfile('test/data/large_crlf.rpt');
 
 # pure LF line endings: backward-compatible with non-standard files
 query TIR rowsort
-SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/lf.rpt', new_line='\n');
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/lf.rpt');
 ----
 Alice	30	98.5
 Bob	25	72.0
@@ -407,7 +407,7 @@ Bob	25	72.0
 # pure LF: schema types still inferred correctly
 query II rowsort
 SELECT column_name, column_type
-FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/lf.rpt', new_line='\n'))
+FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/lf.rpt'))
 ORDER BY column_name;
 ----
 AGE	SMALLINT
@@ -799,9 +799,16 @@ SELECT * FROM read_mpfile('test/data/crlf.rpt', delim=';');
 ----
 delim must be ','
 
-# A LF file is not CRLF: reading it with the default new_line fails, and new_line='\n' fixes it.
+# new_line is not pinned by default (LF and CRLF files both read); it can be given explicitly.
+query TIR rowsort
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/lf.rpt', new_line='\n');
+----
+Alice	30	98.5
+Bob	25	72.0
+
+# A new_line that does not match the file is an error.
 statement error
-SELECT * FROM read_mpfile('test/data/lf.rpt');
+SELECT * FROM read_mpfile('test/data/lf.rpt', new_line='\r\n');
 ----
 
 # new_line is validated by read_csv.

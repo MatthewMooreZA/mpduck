@@ -30,12 +30,13 @@ struct MPReadOptions {
 	//! When non-null, forwarded as the filename= parameter (true, or the name of the column to add).
 	unique_ptr<Value> filename;
 	//! Dialect of the stream MPFileSystem hands to read_csv_auto. Always forwarded, so the sniffer does not have to
-	//! enumerate and re-scan delimiter/quote/escape candidates. Values use read_csv's syntax: new_line is the text
-	//! \r\n (backslash, r, backslash, n), not the control characters.
+	//! enumerate and re-scan delimiter/quote/escape candidates.
 	string delim = ",";
 	string quote = "\"";
 	string escape = "\"";
-	string new_line = "\\r\\n";
+	//! Forwarded only when set: the line ending is cheap to detect, and files may use LF or CRLF. Uses read_csv's
+	//! syntax: the text \r\n (backslash, r, backslash, n), not the control characters.
+	unique_ptr<Value> new_line;
 };
 
 //! Build a read_csv_auto ref for the given list of paths, wrapped in SELECT * EXCLUDE ("!").
@@ -74,12 +75,16 @@ static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths,
 		children.push_back(std::move(dtypes_expr));
 	}
 
-	for (const auto &dialect_option :
-	     {std::make_pair("delim", &options.delim), std::make_pair("quote", &options.quote),
-	      std::make_pair("escape", &options.escape), std::make_pair("new_line", &options.new_line)}) {
+	for (const auto &dialect_option : {std::make_pair("delim", &options.delim), std::make_pair("quote", &options.quote),
+	                                   std::make_pair("escape", &options.escape)}) {
 		auto expr = MPConstant(Value(*dialect_option.second));
 		expr->SetAlias(dialect_option.first);
 		children.push_back(std::move(expr));
+	}
+	if (options.new_line) {
+		auto new_line_expr = MPConstant(*options.new_line);
+		new_line_expr->SetAlias("new_line");
+		children.push_back(std::move(new_line_expr));
 	}
 
 	if (options.filename) {
@@ -144,7 +149,10 @@ static MPReadOptions ExtractReadOptions(TableFunctionBindInput &input) {
 	}
 	ExtractString(input, "quote", options.quote);
 	ExtractString(input, "escape", options.escape);
-	ExtractString(input, "new_line", options.new_line);
+	string new_line;
+	if (ExtractString(input, "new_line", new_line)) {
+		options.new_line = make_uniq<Value>(new_line);
+	}
 	auto it = input.named_parameters.find("filename");
 	if (it != input.named_parameters.end()) {
 		options.filename = make_uniq<Value>(it->second);

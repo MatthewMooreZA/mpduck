@@ -90,18 +90,20 @@ use does not drop the row.
 ### delim, quote, escape and new_line
 
 `read_mpfile` tells `read_csv` the dialect of an mpfile instead of making it sniff one. The defaults are what
-Prophet writes: `delim = ','`, `quote = '"'`, `escape = '"'` and `new_line = '\r\n'` (CRLF). Each can be overridden
-with the parameter of the same name that `read_csv` takes (`sep` is an alias for `delim`; give one or the other):
+Prophet writes: `delim = ','`, `quote = '"'` and `escape = '"'`. Each can be overridden with the parameter of the
+same name that `read_csv` takes (`sep` is an alias for `delim`; give one or the other):
 
 ```sql
 SELECT * FROM read_mpfile('model_points.rpt', quote = '''', escape = '''');
-SELECT * FROM read_mpfile('lf_endings.rpt', new_line = '\n');
 ```
 
-`new_line` takes `read_csv`'s spelling: the text `\r\n`, `\n` or `\r`, not the control characters.
+`new_line` is not set by default, so files with CRLF or LF line endings both read without options. It can be given
+to force one, in `read_csv`'s spelling (the text `\r\n`, `\n` or `\r`, not the control characters); a value that
+does not match the file is an error:
 
-> **Files with LF line endings need `new_line = '\n'`.** Before these defaults existed the line ending was sniffed,
-> so LF files read without options. They now fail with a CSV dialect error unless `new_line = '\n'` is passed.
+```sql
+SELECT * FROM read_mpfile('lf_endings.rpt', new_line = '\n');
+```
 
 `delim` (and `sep`) are accepted for parity with `read_csv`, but only `','` is valid: the header (`!`) rows are
 split and rebuilt on commas, so any other delimiter is rejected with an error.
