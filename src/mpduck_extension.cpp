@@ -1,5 +1,6 @@
 #define DUCKDB_EXTENSION_MAIN
 
+#include "mpduck_compat.hpp"
 #include "mpduck_extension.hpp"
 #include "mpfile_filesystem.hpp"
 #include "write_mpfile.hpp"
@@ -19,36 +20,77 @@
 
 namespace duckdb {
 
+//! The read_mpfile named parameters that are forwarded to read_csv_auto, with read_csv's defaults.
+struct MPReadOptions {
+	//! Bind and sniff every file up front so files may differ in columns and types (also reports a placeholder
+	//! cardinality to the planner).
+	bool union_by_name = false;
+	//! Skip rows that fail to parse instead of raising an error.
+	bool ignore_errors = false;
+	//! Drop zero-byte files from a glob or list before they are read, instead of letting them fail the scan.
+	bool skip_empty_files = true;
+	//! When non-null, forwarded as the filename= parameter (true, or the name of the column to add).
+	unique_ptr<Value> filename;
+	//! Dialect of the stream MPFileSystem hands to read_csv_auto. Always forwarded, so the sniffer does not have to
+	//! enumerate and re-scan delimiter/quote/escape candidates.
+	string delim = ",";
+	string quote = "\"";
+	string escape = "\"";
+	//! Forwarded only when set: the line ending is cheap to detect, and files may use LF or CRLF. Uses read_csv's
+	//! syntax: the text \r\n (backslash, r, backslash, n), not the control characters.
+	unique_ptr<Value> new_line;
+};
+
 //! Build a read_csv_auto ref for the given list of paths, wrapped in SELECT * EXCLUDE ("!").
-//! When a schema is provided its column types are forwarded via the dtypes parameter.
-//! When filename_opt is non-null its value is forwarded as the filename= named parameter of read_csv_auto.
+//! When a schema is provided its column types are forwarded via the dtypes parameter. Each option that differs
+//! from read_csv's default is forwarded as the read_csv_auto named parameter of the same name.
 static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths, const MPFileSchema &schema,
-                                                    unique_ptr<Value> filename_opt = nullptr) {
+                                                    MPReadOptions options) {
 	vector<unique_ptr<ParsedExpression>> children;
 	vector<Value> path_values;
 	path_values.reserve(paths.size());
 	for (const auto &p : paths) {
 		path_values.push_back(Value(p));
 	}
-	children.push_back(make_uniq<ConstantExpression>(Value::LIST(LogicalType::VARCHAR, std::move(path_values))));
+	children.push_back(MPConstant(Value::LIST(LogicalType::VARCHAR, std::move(path_values))));
 
-	auto union_by_name = make_uniq<ConstantExpression>(Value::BOOLEAN(true));
-	union_by_name->SetAlias("union_by_name");
-	children.push_back(std::move(union_by_name));
+	if (options.union_by_name) {
+		auto union_by_name_expr = MPConstant(Value::BOOLEAN(true));
+		union_by_name_expr->SetAlias("union_by_name");
+		children.push_back(std::move(union_by_name_expr));
+	}
+
+	if (options.ignore_errors) {
+		auto ignore_errors_expr = MPConstant(Value::BOOLEAN(true));
+		ignore_errors_expr->SetAlias("ignore_errors");
+		children.push_back(std::move(ignore_errors_expr));
+	}
 
 	if (schema.found && !schema.column_names.empty() && !schema.column_types.empty()) {
 		child_list_t<Value> dtypes_fields;
 		size_t n = MinValue(schema.column_names.size(), schema.column_types.size());
 		for (size_t i = 0; i < n; i++) {
-			dtypes_fields.push_back({schema.column_names[i], Value(schema.column_types[i])});
+			dtypes_fields.push_back({MPMakeName(schema.column_names[i]), Value(schema.column_types[i])});
 		}
-		auto dtypes_expr = make_uniq<ConstantExpression>(Value::STRUCT(std::move(dtypes_fields)));
+		auto dtypes_expr = MPConstant(Value::STRUCT(std::move(dtypes_fields)));
 		dtypes_expr->SetAlias("dtypes");
 		children.push_back(std::move(dtypes_expr));
 	}
 
-	if (filename_opt) {
-		auto filename_expr = make_uniq<ConstantExpression>(*filename_opt);
+	for (const auto &dialect_option : {std::make_pair("delim", &options.delim), std::make_pair("quote", &options.quote),
+	                                   std::make_pair("escape", &options.escape)}) {
+		auto expr = MPConstant(Value(*dialect_option.second));
+		expr->SetAlias(dialect_option.first);
+		children.push_back(std::move(expr));
+	}
+	if (options.new_line) {
+		auto new_line_expr = MPConstant(*options.new_line);
+		new_line_expr->SetAlias("new_line");
+		children.push_back(std::move(new_line_expr));
+	}
+
+	if (options.filename) {
+		auto filename_expr = MPConstant(*options.filename);
 		filename_expr->SetAlias("filename");
 		children.push_back(std::move(filename_expr));
 	}
@@ -59,7 +101,7 @@ static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths,
 	// Wrap in SELECT * EXCLUDE ("!") to hide the indicator column from callers.
 	auto select_node = make_uniq<SelectNode>();
 	auto star = make_uniq<StarExpression>();
-	star->exclude_list.insert(QualifiedColumnName("!"));
+	MPExcludeColumn(*star, "!");
 	select_node->select_list.push_back(std::move(star));
 	select_node->from_table = std::move(table_function);
 
@@ -69,50 +111,150 @@ static unique_ptr<TableRef> MakeReadCSVRefFromPaths(const vector<string> &paths,
 	return make_uniq<SubqueryRef>(std::move(select_stmt));
 }
 
-//! Build a read_csv_auto ref for a single path (wraps MakeReadCSVRefFromPaths).
+//! Build a read_csv_auto ref for a single path (wraps MakeReadCSVRefFromPaths). One file is trivially
+//! consistent with itself, so union_by_name is never needed.
 static unique_ptr<TableRef> MakeReadCSVRef(const string &path, const MPFileSchema &schema,
-                                           unique_ptr<Value> filename_opt = nullptr) {
-	return MakeReadCSVRefFromPaths({path}, schema, std::move(filename_opt));
+                                           MPReadOptions options = MPReadOptions()) {
+	options.union_by_name = false;
+	return MakeReadCSVRefFromPaths({path}, schema, std::move(options));
 }
 
-//! Extract the filename named parameter from input, if present.
-static unique_ptr<Value> ExtractFilenameOpt(TableFunctionBindInput &input) {
+//! Read a BOOLEAN named parameter. Absent or NULL means `default_value`.
+static bool ExtractBool(TableFunctionBindInput &input, const string &name, bool default_value = false) {
+	auto it = input.named_parameters.find(MPMakeName(name));
+	if (it == input.named_parameters.end() || it->second.IsNull()) {
+		return default_value;
+	}
+	return it->second.GetValue<bool>();
+}
+
+//! Read a VARCHAR named parameter into target. Absent or NULL leaves the default in place; returns whether it was set.
+static bool ExtractString(TableFunctionBindInput &input, const string &name, string &target) {
+	auto it = input.named_parameters.find(MPMakeName(name));
+	if (it == input.named_parameters.end() || it->second.IsNull()) {
+		return false;
+	}
+	target = it->second.GetValue<string>();
+	return true;
+}
+
+//! Collect the named parameters that are forwarded to read_csv_auto.
+static MPReadOptions ExtractReadOptions(TableFunctionBindInput &input) {
+	MPReadOptions options;
+	options.union_by_name = ExtractBool(input, "union_by_name");
+	options.ignore_errors = ExtractBool(input, "ignore_errors");
+	options.skip_empty_files = ExtractBool(input, "skip_empty_files", true);
+	// delim and sep are read_csv's two spellings of one option
+	if (ExtractString(input, "delim", options.delim) && ExtractString(input, "sep", options.delim)) {
+		throw InvalidInputException("read_mpfile: specify only one of delim and sep");
+	}
+	ExtractString(input, "sep", options.delim);
+	if (options.delim != ",") {
+		// MPFileSystem splits and rebuilds the header rows on commas, so another delimiter cannot work
+		throw InvalidInputException("read_mpfile: delim must be ',', mpfile header rows are always comma-separated");
+	}
+	ExtractString(input, "quote", options.quote);
+	ExtractString(input, "escape", options.escape);
+	string new_line;
+	if (ExtractString(input, "new_line", new_line)) {
+		options.new_line = make_uniq<Value>(new_line);
+	}
 	auto it = input.named_parameters.find("filename");
 	if (it != input.named_parameters.end()) {
-		return make_uniq<Value>(it->second);
+		options.filename = make_uniq<Value>(it->second);
 	}
-	return nullptr;
+	return options;
 }
 
-//! Redirect read_mpfile('path') to read_csv_auto('path', union_by_name=true[, dtypes=...]).
+//! Concrete file paths for entries that are each either a literal path or a glob, in order.
+static vector<string> ExpandEntries(FileSystem &fs, const vector<string> &entries) {
+	vector<string> paths;
+	for (const auto &entry : entries) {
+		if (FileSystem::HasGlob(entry)) {
+			for (const auto &info : fs.Glob(entry)) {
+				paths.push_back(info.path);
+			}
+		} else {
+			paths.push_back(entry);
+		}
+	}
+	return paths;
+}
+
+//! Shared by the glob and list forms of read_mpfile. Files are never combined by name unless asked to.
+//!
+//! skip_empty_files = true (default): zero-byte files among the expanded paths are dropped first, at the cost of one
+//! open and size lookup per file. Files that are not empty but have no header row are not covered; see below.
+//!
+//! union_by_name = false (default): the entries are only expanded. The schema for the dtypes parameter comes from
+//! the first matched file that has data; every other file is left for read_csv_auto to open lazily, so bind
+//! cost does not grow with the number of files (which matters most on remote storage). All files must have the
+//! same columns, as with read_csv.
+//!
+//! union_by_name = true: every file's header and VARIABLE_TYPES rows are read up front, files with no data are
+//! dropped, the schemas are merged (numeric types widen, other mismatches become VARCHAR) and read_csv_auto is
+//! asked to union the files by column name. This costs one extra open and read per file.
+static unique_ptr<TableRef> ReadMPFileMultiRef(FileSystem &fs, const vector<string> &entries, MPReadOptions options,
+                                               const string &no_match_message) {
+	auto paths = ExpandEntries(fs, entries);
+
+	if (options.skip_empty_files) {
+		vector<string> non_empty;
+		for (auto &path : paths) {
+			if (!IsZeroByteMPFile(path, fs)) {
+				non_empty.push_back(std::move(path));
+			}
+		}
+		paths = std::move(non_empty);
+	}
+
+	if (!options.union_by_name) {
+		MPFileSchema schema;
+		for (const auto &path : paths) {
+			auto s = ParseMPFileSchema(path, fs);
+			if (s.column_names.size() >= 2) { // "!" indicator + at least one column
+				schema = std::move(s);
+				break;
+			}
+		}
+		if (schema.column_names.empty()) {
+			throw InvalidInputException("%s", no_match_message);
+		}
+		return MakeReadCSVRefFromPaths(paths, schema, std::move(options));
+	}
+
+	vector<string> data_paths;
+	vector<MPFileSchema> schemas;
+	for (const auto &path : paths) {
+		auto s = ParseMPFileSchema(path, fs);
+		if (s.column_names.size() >= 2) {
+			data_paths.push_back(path);
+			schemas.push_back(std::move(s));
+		}
+	}
+	if (data_paths.empty()) {
+		throw InvalidInputException("%s", no_match_message);
+	}
+	auto schema = MergeSchemas(schemas);
+	return MakeReadCSVRefFromPaths(data_paths, schema, std::move(options));
+}
+
+//! Redirect read_mpfile('path') to read_csv_auto(['path'][, dtypes=...]). A glob is handled by
+//! ReadMPFileMultiRef; a literal path is a single file and needs no union.
 //! The registered MPFileSystem intercepts each file open and returns filtered content.
 static unique_ptr<TableRef> ReadMPFileBindReplace(ClientContext &context, TableFunctionBindInput &input) {
 	auto path = input.inputs[0].GetValue<string>();
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto filename_opt = ExtractFilenameOpt(input);
+	auto options = ExtractReadOptions(input);
 
 	if (FileSystem::HasGlob(path)) {
-		// Expand the glob, filter out empty files, parse schemas, and merge.
-		auto files = fs.Glob(path);
-		vector<string> data_paths;
-		vector<MPFileSchema> schemas;
-		for (const auto &info : files) {
-			auto s = ParseMPFileSchema(info.path, fs);
-			if (s.column_names.size() >= 2) { // "!" indicator + at least one column
-				data_paths.push_back(info.path);
-				schemas.push_back(std::move(s));
-			}
-		}
-		if (data_paths.empty()) {
-			throw InvalidInputException("read_mpfile: no files with data matched '%s'", path);
-		}
-		auto schema = MergeSchemas(schemas);
-		return MakeReadCSVRefFromPaths(data_paths, schema, std::move(filename_opt));
+		return ReadMPFileMultiRef(fs, {path}, std::move(options),
+		                          StringUtil::Format("read_mpfile: no files with data matched '%s'", path));
 	}
 
 	auto schema = ParseMPFileSchema(path, fs);
-	auto table_function = MakeReadCSVRef(path, schema, std::move(filename_opt));
-	table_function->alias = fs.ExtractBaseName(path);
+	auto table_function = MakeReadCSVRef(path, schema, std::move(options));
+	table_function->alias = MPMakeName(fs.ExtractBaseName(path));
 	return std::move(table_function);
 }
 
@@ -125,50 +267,40 @@ static unique_ptr<TableRef> ReadMPFileReplacement(ClientContext &context, Replac
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
+	if (FileSystem::HasGlob(table_name)) {
+		// A glob pattern is not an openable path: expand it like read_mpfile does (union_by_name = false).
+		return ReadMPFileMultiRef(fs, {table_name}, MPReadOptions(),
+		                          StringUtil::Format("read_mpfile: no files with data matched '%s'", table_name));
+	}
 	auto schema = ParseMPFileSchema(table_name, fs);
 	auto table_function = MakeReadCSVRef(table_name, schema);
-	table_function->alias = fs.ExtractBaseName(table_name);
+	table_function->alias = MPMakeName(fs.ExtractBaseName(table_name));
 	return std::move(table_function);
 }
 
 //! Redirect read_mpfile(['path1', 'path2', ...]) — each entry may be a literal path or glob.
-//! Schemas from all matched files are merged before forwarding to read_csv_auto.
+//! See ReadMPFileMultiRef for how the files are combined. No alias — list input spans multiple files.
 static unique_ptr<TableRef> ReadMPFileListBindReplace(ClientContext &context, TableFunctionBindInput &input) {
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto &path_entries = ListValue::GetChildren(input.inputs[0]);
-	auto filename_opt = ExtractFilenameOpt(input);
-
-	// Expand globs, collect concrete paths, and filter out files with no data.
-	vector<string> all_paths;
-	vector<MPFileSchema> schemas;
-	for (const auto &entry : path_entries) {
-		auto path = entry.GetValue<string>();
-		if (FileSystem::HasGlob(path)) {
-			auto files = fs.Glob(path);
-			for (auto &info : files) {
-				auto s = ParseMPFileSchema(info.path, fs);
-				if (s.column_names.size() >= 2) { // "!" indicator + at least one column
-					all_paths.push_back(info.path);
-					schemas.push_back(std::move(s));
-				}
-			}
-		} else {
-			auto s = ParseMPFileSchema(path, fs);
-			if (s.column_names.size() >= 2) {
-				all_paths.push_back(path);
-				schemas.push_back(std::move(s));
-			}
-		}
+	vector<string> entries;
+	for (const auto &entry : ListValue::GetChildren(input.inputs[0])) {
+		entries.push_back(entry.GetValue<string>());
 	}
+	return ReadMPFileMultiRef(fs, entries, ExtractReadOptions(input),
+	                          "read_mpfile: no files matched the provided paths");
+}
 
-	if (all_paths.empty()) {
-		throw InvalidInputException("read_mpfile: no files matched the provided paths");
-	}
-
-	auto schema = MergeSchemas(schemas);
-
-	// No alias — list input spans multiple files.
-	return MakeReadCSVRefFromPaths(all_paths, schema, std::move(filename_opt));
+//! The named parameters of both read_mpfile overloads.
+static vector<pair<string, LogicalType>> MPReadParameters() {
+	return {{"filename", LogicalType::ANY},
+	        {"union_by_name", LogicalType::BOOLEAN},
+	        {"ignore_errors", LogicalType::BOOLEAN},
+	        {"delim", LogicalType::VARCHAR},
+	        {"sep", LogicalType::VARCHAR},
+	        {"quote", LogicalType::VARCHAR},
+	        {"escape", LogicalType::VARCHAR},
+	        {"new_line", LogicalType::VARCHAR},
+	        {"skip_empty_files", LogicalType::BOOLEAN}};
 }
 
 static void LoadInternal(ExtensionLoader &loader) {
@@ -180,13 +312,13 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// Explicit table function: SELECT * FROM read_mpfile('file.rpt')
 	TableFunction read_mpfile("read_mpfile", {LogicalType::VARCHAR}, nullptr, nullptr);
 	read_mpfile.bind_replace = ReadMPFileBindReplace;
-	read_mpfile.named_parameters["filename"] = LogicalType::ANY;
+	MPAddNamedParameters(read_mpfile, MPReadParameters());
 	loader.RegisterFunction(read_mpfile);
 
 	// List overload: SELECT * FROM read_mpfile(['file1.rpt', 'glob_*.rpt', ...])
 	TableFunction read_mpfile_list("read_mpfile", {LogicalType::LIST(LogicalType::VARCHAR)}, nullptr, nullptr);
 	read_mpfile_list.bind_replace = ReadMPFileListBindReplace;
-	read_mpfile_list.named_parameters["filename"] = LogicalType::ANY;
+	MPAddNamedParameters(read_mpfile_list, MPReadParameters());
 	loader.RegisterFunction(read_mpfile_list);
 
 	// Implicit scan: SELECT * FROM 'file.rpt'

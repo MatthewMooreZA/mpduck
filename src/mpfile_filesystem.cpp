@@ -133,15 +133,23 @@ static string MapMPType(const string &mp_type, size_t col_idx) {
 	throw IOException("Unknown mpfile type specifier '%s' at column %llu", mp_type, (unsigned long long)col_idx);
 }
 
+bool IsZeroByteMPFile(const string &path, FileSystem &fs) {
+	// The bypass makes this the raw file size rather than the size of the filtered stream MPFileSystem would serve.
+	// As in ParseMPFileSchema, open errors propagate so an unreadable file is never mistaken for an empty one.
+	ScopedMPFSBypass bypass;
+	auto handle = fs.OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
+	return fs.GetFileSize(*handle) == 0;
+}
+
 MPFileSchema ParseMPFileSchema(const string &path, FileSystem &fs) {
 	MPFileSchema schema;
 
+	// Errors opening the file (missing, permission denied, network, credentials) propagate: swallowing them
+	// would make callers treat an unreadable file as one with no data and silently drop it from a glob.
 	unique_ptr<FileHandle> handle;
-	try {
+	{
 		ScopedMPFSBypass bypass;
 		handle = fs.OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
-	} catch (...) {
-		return schema;
 	}
 
 	ForEachLine(*handle, [&](const string &line) -> bool {
@@ -616,6 +624,27 @@ bool MPFileSystem::FileExists(const string &filename, optional_ptr<FileOpener> o
 	}
 	auto local_fs = FileSystem::CreateLocal();
 	return local_fs->FileExists(filename, opener);
+}
+
+bool MPFileSystem::DirectoryExists(const string &directory, optional_ptr<FileOpener> opener) {
+	auto db = FileOpener::TryGetDatabase(opener);
+	if (db) {
+		ScopedMPFSBypass bypass;
+		return DBConfig::GetConfig(*db).file_system->DirectoryExists(directory, opener);
+	}
+	auto local_fs = FileSystem::CreateLocal();
+	return local_fs->DirectoryExists(directory, opener);
+}
+
+void MPFileSystem::RemoveFile(const string &filename, optional_ptr<FileOpener> opener) {
+	auto db = FileOpener::TryGetDatabase(opener);
+	if (db) {
+		ScopedMPFSBypass bypass;
+		DBConfig::GetConfig(*db).file_system->RemoveFile(filename, opener);
+		return;
+	}
+	auto local_fs = FileSystem::CreateLocal();
+	local_fs->RemoveFile(filename, opener);
 }
 
 } // namespace duckdb

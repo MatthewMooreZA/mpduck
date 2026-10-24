@@ -1,0 +1,6 @@
+VARIABLE_TYPES,T1,T20,S,N
+!,NAME,AGE,SCORE
+*,Alice,30,98.5
+*,Bob,notanumber,72.0
+*,Carol,41,abc
+*,Dave,25,60.5

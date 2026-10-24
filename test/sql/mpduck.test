@@ -31,7 +31,7 @@ SCORE	DOUBLE
 #          SALARY=DOUBLE, DEPT=VARCHAR, RATING=DOUBLE, GRADE=VARCHAR
 query II
 SELECT column_name, column_type
-FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/glob_*.rpt'))
+FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/glob_*.rpt', union_by_name=true))
 ORDER BY column_name;
 ----
 AGE	INTEGER
@@ -76,7 +76,7 @@ Velociraptor	1.8	1924
 # Confirm data round-trips correctly: glob_*.rpt now covers all four glob files;
 # NAME is the column present in every file.
 query T rowsort
-SELECT NAME FROM read_mpfile('test/data/glob_*.rpt');
+SELECT NAME FROM read_mpfile('test/data/glob_*.rpt', union_by_name=true);
 ----
 Alice
 Bob
@@ -85,14 +85,14 @@ Diana
 
 # List overload: explicit list of files — schemas merged, rows combined
 query IIIR rowsort
-SELECT NAME, AGE, CODE, SCORE FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt']);
+SELECT NAME, AGE, CODE, SCORE FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt'], union_by_name=true);
 ----
 Alice	30	ABC	98.5
 Bob	25	XYZ	72.0
 
 # List overload: single glob entry expands to all matching files; NAME is present in all four
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_*.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_*.rpt'], union_by_name=true);
 ----
 Alice
 Bob
@@ -102,7 +102,7 @@ Diana
 # List overload: schema merging across list entries (AGE widened SMALLINT→INTEGER, SCORE widened →DOUBLE)
 query II
 SELECT column_name, column_type
-FROM (DESCRIBE SELECT * FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt']))
+FROM (DESCRIBE SELECT * FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt'], union_by_name=true))
 ORDER BY column_name;
 ----
 AGE	INTEGER
@@ -116,7 +116,7 @@ SCORE	DOUBLE
 # NAME is the only column present in all four files; selecting it gives a clean equality check.
 # Results must equal the equivalent explicit file list.
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_a*.rpt', 'test/data/glob_b*.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_a*.rpt', 'test/data/glob_b*.rpt'], union_by_name=true);
 ----
 Alice
 Bob
@@ -124,7 +124,7 @@ Charlie
 Diana
 
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt', 'test/data/glob_b.rpt', 'test/data/glob_b2.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt', 'test/data/glob_b.rpt', 'test/data/glob_b2.rpt'], union_by_name=true);
 ----
 Alice
 Bob
@@ -135,7 +135,7 @@ Diana
 # footer.rpt contributes Alice and Bob; all six rows are union'd via union_by_name.
 # Results must equal the equivalent explicit file list.
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_a*.rpt', 'test/data/glob_b*.rpt', 'test/data/footer.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_a*.rpt', 'test/data/glob_b*.rpt', 'test/data/footer.rpt'], union_by_name=true);
 ----
 Alice
 Alice
@@ -145,7 +145,7 @@ Charlie
 Diana
 
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt', 'test/data/glob_b.rpt', 'test/data/glob_b2.rpt', 'test/data/footer.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt', 'test/data/glob_b.rpt', 'test/data/glob_b2.rpt', 'test/data/footer.rpt'], union_by_name=true);
 ----
 Alice
 Alice
@@ -176,7 +176,7 @@ Bob	25	72.3	false	1995-06-20
 # Mixed indicator variants across files: '!' and '!1' both normalise to the same indicator
 # column '!', so schema merging produces exactly one '!' column and the EXCLUDE step works.
 query TIT rowsort
-SELECT NAME, AGE, CITY FROM read_mpfile(['test/data/mixed_indicator_a.rpt', 'test/data/mixed_indicator_b.rpt']);
+SELECT NAME, AGE, CITY FROM read_mpfile(['test/data/mixed_indicator_a.rpt', 'test/data/mixed_indicator_b.rpt'], union_by_name=true);
 ----
 Alice	30	London
 Bob	25	Paris
@@ -184,7 +184,7 @@ Bob	25	Paris
 # The merged schema must contain no '!' column — only the data columns.
 query II
 SELECT column_name, column_type
-FROM (DESCRIBE SELECT * FROM read_mpfile(['test/data/mixed_indicator_a.rpt', 'test/data/mixed_indicator_b.rpt']))
+FROM (DESCRIBE SELECT * FROM read_mpfile(['test/data/mixed_indicator_a.rpt', 'test/data/mixed_indicator_b.rpt'], union_by_name=true))
 ORDER BY column_name;
 ----
 AGE	SMALLINT
@@ -419,7 +419,7 @@ SCORE	DOUBLE
 # only the two files with data contribute columns.
 query II
 SELECT column_name, column_type
-FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/glob_a*.rpt'))
+FROM (DESCRIBE SELECT * FROM read_mpfile('test/data/glob_a*.rpt', union_by_name=true))
 ORDER BY column_name;
 ----
 AGE	SMALLINT
@@ -431,19 +431,19 @@ SCORE	DOUBLE
 
 # Empty-file filtering: file with no '!' column header is silently ignored via list input.
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/no_columns.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/no_columns.rpt'], union_by_name=true);
 ----
 Alice
 
 # Empty-file filtering: zero-byte file is silently ignored via list input.
 query T rowsort
-SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt']);
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt'], union_by_name=true);
 ----
 Alice
 
 # Empty-file filtering: list containing only empty/no-column files throws an error.
 statement error
-SELECT * FROM read_mpfile(['test/data/empty.rpt', 'test/data/no_columns.rpt']);
+SELECT * FROM read_mpfile(['test/data/empty.rpt', 'test/data/no_columns.rpt'], union_by_name=true);
 ----
 
 # filename=true adds a filename column containing the file path for each row
@@ -454,14 +454,14 @@ Alice	30	glob_a.rpt
 
 # filename=true tracks per-file paths when reading a glob
 query TT rowsort
-SELECT NAME, parse_filename(filename) FROM read_mpfile('test/data/glob_a*.rpt', filename=true);
+SELECT NAME, parse_filename(filename) FROM read_mpfile('test/data/glob_a*.rpt', filename=true, union_by_name=true);
 ----
 Alice	glob_a.rpt
 Charlie	glob_a2.rpt
 
 # filename=true works with the list overload
 query TT rowsort
-SELECT NAME, parse_filename(filename) FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt'], filename=true);
+SELECT NAME, parse_filename(filename) FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt'], filename=true, union_by_name=true);
 ----
 Alice	glob_a.rpt
 Bob	glob_b.rpt
@@ -471,3 +471,437 @@ query TT
 SELECT NAME, parse_filename(source_file) FROM read_mpfile('test/data/glob_a.rpt', filename='source_file');
 ----
 Alice	glob_a.rpt
+
+# write_mpfile: small doubles keep full precision (std::to_string would write 0.000000)
+statement ok
+COPY (
+  SELECT 1e-9::DOUBLE AS TINY, 123456789.123456789::DOUBLE AS BIG
+) TO '__TEST_DIR__/write_double_precision.rpt' (FORMAT mpfile);
+
+query II
+SELECT TINY = 1e-9, BIG = 123456789.123456789 FROM read_mpfile('__TEST_DIR__/write_double_precision.rpt');
+----
+true	true
+
+# write_mpfile: BIGINT values above the INTEGER range survive a round-trip (written as N, read as DOUBLE)
+statement ok
+COPY (
+  SELECT 5000000000::BIGINT AS BIG
+) TO '__TEST_DIR__/write_bigint.rpt' (FORMAT mpfile);
+
+query R
+SELECT BIG FROM read_mpfile('__TEST_DIR__/write_bigint.rpt');
+----
+5000000000.0
+
+# write_mpfile: types without a native mpfile code are written as quoted text
+statement ok
+COPY (
+  SELECT DATE '2024-01-31' AS D, [1, 2, 3] AS L
+) TO '__TEST_DIR__/write_fallback_types.rpt' (FORMAT mpfile);
+
+query TT
+SELECT D, L FROM read_mpfile('__TEST_DIR__/write_fallback_types.rpt');
+----
+2024-01-31	[1, 2, 3]
+
+# write_mpfile: NULLs round-trip as NULL in numeric and text columns
+statement ok
+COPY (
+  SELECT * FROM (VALUES ('a', 1.5), (NULL, NULL)) t(S, N)
+) TO '__TEST_DIR__/write_nulls.rpt' (FORMAT mpfile);
+
+query TR rowsort
+SELECT S, N FROM read_mpfile('__TEST_DIR__/write_nulls.rpt');
+----
+NULL	NULL
+a	1.5
+
+# write_mpfile: column names that cannot be represented in the header row are rejected
+statement error
+COPY (SELECT 1 AS "a,b") TO '__TEST_DIR__/write_bad_name.rpt' (FORMAT mpfile);
+----
+cannot be written to an mpfile
+
+# write_mpfile: unknown COPY options are rejected
+statement error
+COPY (SELECT 1 AS A) TO '__TEST_DIR__/write_bad_option.rpt' (FORMAT mpfile, NOT_AN_OPTION true);
+----
+
+# read_mpfile: a glob of files with identical VARIABLE_TYPES schemas is scanned without union_by_name
+statement ok
+COPY (SELECT 'a' AS N, CAST(1 AS SMALLINT) AS V) TO '__TEST_DIR__/same_1.rpt';
+
+statement ok
+COPY (SELECT 'b' AS N, CAST(2 AS SMALLINT) AS V) TO '__TEST_DIR__/same_2.rpt';
+
+query TI rowsort
+SELECT N, V FROM read_mpfile('__TEST_DIR__/same_*.rpt');
+----
+a	1
+b	2
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_mpfile('__TEST_DIR__/same_*.rpt')) ORDER BY column_name;
+----
+N	VARCHAR
+V	SMALLINT
+
+# read_mpfile: list form over identical-schema files also works
+query TI rowsort
+SELECT N, V FROM read_mpfile(['__TEST_DIR__/same_1.rpt', '__TEST_DIR__/same_2.rpt']);
+----
+a	1
+b	2
+
+# read_mpfile: same columns in a different order still need union_by_name and must match by name
+statement ok
+COPY (SELECT CAST(3 AS SMALLINT) AS V, 'c' AS N) TO '__TEST_DIR__/order_1.rpt';
+
+statement ok
+COPY (SELECT 'd' AS N, CAST(4 AS SMALLINT) AS V) TO '__TEST_DIR__/order_2.rpt';
+
+query TI rowsort
+SELECT N, V FROM read_mpfile('__TEST_DIR__/order_*.rpt');
+----
+c	3
+d	4
+
+# read_mpfile: the filename column still works on the identical-schema (no union_by_name) path
+query TT rowsort
+SELECT N, parse_filename(filename) FROM read_mpfile('__TEST_DIR__/same_*.rpt', filename=true);
+----
+a	same_1.rpt
+b	same_2.rpt
+
+# read_mpfile: union_by_name defaults to false, like read_csv. Files with different columns are an error...
+statement error
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt']);
+----
+do not exist in the CSV File
+
+statement error
+SELECT NAME FROM read_mpfile('test/data/glob_a*.rpt');
+----
+do not exist in the CSV File
+
+# ...and union_by_name := false is the same as omitting it.
+statement error
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt'], union_by_name=false);
+----
+do not exist in the CSV File
+
+# ...while union_by_name := true combines them by column name.
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_a2.rpt'], union_by_name=true);
+----
+Alice
+Charlie
+
+# Without union_by_name the schema (and so the column types) comes from the first file only.
+# glob_a has AGE SMALLINT / SCORE DOUBLE; glob_b has AGE INTEGER / SCORE INTEGER.
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt']))
+ORDER BY column_name;
+----
+AGE	SMALLINT
+CODE	VARCHAR
+NAME	VARCHAR
+SCORE	DOUBLE
+
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/glob_b.rpt']);
+----
+Alice	30
+Bob	25
+
+# skip_empty_files (default true) drops zero-byte files from a list or glob before reading. It is exercised with
+# the empty file first and not first, with union_by_name both false and true.
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt']);
+----
+Alice
+
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/empty.rpt', 'test/data/glob_a.rpt']);
+----
+Alice
+
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt'], union_by_name=true);
+----
+Alice
+
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/empty.rpt', 'test/data/glob_a.rpt'], union_by_name=true);
+----
+Alice
+
+# Empty files between and around files with data.
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/skip_empty/b_data.rpt', 'test/data/empty.rpt', 'test/data/skip_empty/d_data.rpt']);
+----
+Alice
+Dave
+
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/empty.rpt', 'test/data/skip_empty/b_data.rpt', 'test/data/skip_empty/c_empty.rpt', 'test/data/skip_empty/d_data.rpt'], union_by_name=true);
+----
+Alice
+Dave
+
+# Globs: a_empty.rpt and c_empty.rpt are empty, b_data.rpt and d_data.rpt have data.
+query T rowsort
+SELECT NAME FROM read_mpfile('test/data/skip_empty/*.rpt');
+----
+Alice
+Dave
+
+query T rowsort
+SELECT NAME FROM read_mpfile('test/data/skip_empty/*.rpt', union_by_name=true);
+----
+Alice
+Dave
+
+query T rowsort
+SELECT NAME FROM 'test/data/skip_empty/*.rpt';
+----
+Alice
+Dave
+
+# skip_empty_files=false restores the failure without union_by_name, whether the empty file is first or not:
+# the first file with data supplies the schema and the empty file then fails when it is read.
+statement error
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt'], skip_empty_files=false);
+----
+do not exist in the CSV File
+
+statement error
+SELECT NAME FROM read_mpfile(['test/data/empty.rpt', 'test/data/glob_a.rpt'], skip_empty_files=false);
+----
+do not exist in the CSV File
+
+# With union_by_name=true the header check drops empty files whatever skip_empty_files says.
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/empty.rpt'], union_by_name=true, skip_empty_files=false);
+----
+Alice
+
+query T rowsort
+SELECT NAME FROM read_mpfile(['test/data/empty.rpt', 'test/data/glob_a.rpt'], union_by_name=true, skip_empty_files=false);
+----
+Alice
+
+# A non-empty file with no header row is not covered by skip_empty_files.
+statement error
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/no_columns.rpt']);
+----
+do not exist in the CSV File
+
+# skip_empty_files must be a boolean.
+statement error
+SELECT * FROM read_mpfile('test/data/glob_a.rpt', skip_empty_files='maybe');
+----
+
+# A missing file is an error rather than being silently dropped.
+statement error
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/does_not_exist.rpt']);
+----
+does_not_exist.rpt
+
+# Input with no file that has any data is still an error with a clear message.
+statement error
+SELECT * FROM read_mpfile(['test/data/empty.rpt', 'test/data/no_columns.rpt']);
+----
+no files matched
+
+# union_by_name must be a boolean.
+statement error
+SELECT * FROM read_mpfile('test/data/glob_a.rpt', union_by_name='maybe');
+----
+
+# An unreadable file is an error even with union_by_name=true; it used to be silently dropped from the result.
+statement error
+SELECT NAME FROM read_mpfile(['test/data/glob_a.rpt', 'test/data/does_not_exist.rpt'], union_by_name=true);
+----
+does_not_exist.rpt
+
+statement error
+SELECT NAME FROM read_mpfile('test/data/does_not_exist.rpt');
+----
+does_not_exist.rpt
+
+statement error
+SELECT * FROM 'test/data/does_not_exist.rpt';
+----
+does_not_exist.rpt
+
+# The implicit FROM 'glob' scan expands the glob and takes column types from VARIABLE_TYPES.
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM '__TEST_DIR__/same_*.rpt') ORDER BY column_name;
+----
+N	VARCHAR
+V	SMALLINT
+
+query TI rowsort
+SELECT N, V FROM '__TEST_DIR__/same_*.rpt';
+----
+a	1
+b	2
+
+statement error
+SELECT * FROM 'test/data/nomatch_*.rpt';
+----
+no files with data matched
+
+# read_mpfile: ignore_errors defaults to false, like read_csv. A row that fails to convert is an error...
+# bad_rows.rpt: Bob's AGE (SMALLINT) and Carol's SCORE (DOUBLE) do not parse; Alice and Dave are fine.
+statement error
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/bad_rows.rpt');
+----
+Could not convert string "notanumber"
+
+statement error
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/bad_rows.rpt', ignore_errors=false);
+----
+Could not convert string "notanumber"
+
+# ...and with ignore_errors=true the rows that fail to convert are skipped.
+query TIR rowsort
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/bad_rows.rpt', ignore_errors=true);
+----
+Alice	30	98.5
+Dave	25	60.5
+
+# It behaves the same as read_csv's ignore_errors.
+query TIR rowsort
+SELECT NAME, AGE, SCORE
+FROM read_csv('test/data/bad_rows.rpt', header=true,
+              dtypes={'!': 'VARCHAR', NAME: 'VARCHAR', AGE: 'SMALLINT', SCORE: 'DOUBLE'}, ignore_errors=true);
+----
+Alice	30	98.5
+Dave	25	60.5
+
+# As in read_csv, only the columns a query reads are converted: Carol's bad SCORE is never looked at here,
+# so her row is kept, while Bob (bad AGE) is still skipped.
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('test/data/bad_rows.rpt', ignore_errors=true);
+----
+Alice	30
+Carol	41
+Dave	25
+
+# ignore_errors works with the glob and list forms, with union_by_name, and with filename.
+
+query TIR rowsort
+SELECT NAME, AGE, SCORE FROM read_mpfile(['test/data/bad_rows.rpt', 'test/data/bad_rows.rpt'], ignore_errors=true);
+----
+Alice	30	98.5
+Alice	30	98.5
+Dave	25	60.5
+Dave	25	60.5
+
+query TIR rowsort
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/bad_row*.rpt', union_by_name=true, ignore_errors=true);
+----
+Alice	30	98.5
+Dave	25	60.5
+
+query TRT rowsort
+SELECT NAME, SCORE, parse_filename(filename) FROM read_mpfile('test/data/bad_rows.rpt', ignore_errors=true, filename=true);
+----
+Alice	98.5	bad_rows.rpt
+Bob	72.0	bad_rows.rpt
+Dave	60.5	bad_rows.rpt
+
+# ignore_errors skips rows, not files: an unreadable file is still an error, as in read_csv.
+statement error
+SELECT NAME FROM read_mpfile(['test/data/bad_rows.rpt', 'test/data/does_not_exist.rpt'], ignore_errors=true);
+----
+does_not_exist.rpt
+
+# ignore_errors must be a boolean.
+statement error
+SELECT * FROM read_mpfile('test/data/bad_rows.rpt', ignore_errors='maybe');
+----
+
+# Dialect parameters: delim, quote, escape and new_line are forwarded to read_csv. The defaults are
+# delim=',', quote='"', escape='"' and new_line='\r\n', so a CRLF file with double-quoted strings needs no options.
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('test/data/crlf.rpt', delim=',', quote='"', escape='"', new_line='\r\n');
+----
+Alice	30
+Bob	25
+
+# The defaults apply to the replacement scan too.
+query TI rowsort
+SELECT NAME, AGE FROM 'test/data/crlf.rpt';
+----
+Alice	30
+Bob	25
+
+# Defaults do not understand single-quoted fields: the comma inside 'Smith, J' splits the row.
+statement error
+SELECT * FROM read_mpfile('test/data/quote_single.rpt');
+----
+
+# quote and escape override the defaults.
+query TI rowsort
+SELECT NAME, N FROM read_mpfile('test/data/quote_single.rpt', quote='''', escape='''');
+----
+O'Brien	2
+Smith, J	1
+
+# ... and work for the list form and for several files at once.
+query TI rowsort
+SELECT NAME, N FROM read_mpfile(['test/data/quote_single.rpt', 'test/data/quote_single.rpt'], quote='''', escape='''');
+----
+O'Brien	2
+O'Brien	2
+Smith, J	1
+Smith, J	1
+
+# sep is read_csv's alias for delim.
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('test/data/crlf.rpt', sep=',');
+----
+Alice	30
+Bob	25
+
+# delim and sep together are ambiguous.
+statement error
+SELECT * FROM read_mpfile('test/data/crlf.rpt', delim=',', sep=',');
+----
+specify only one of delim and sep
+
+# Only the comma delimiter works: MPFileSystem rebuilds the header rows on commas.
+statement error
+SELECT * FROM read_mpfile('test/data/crlf.rpt', delim=';');
+----
+delim must be ','
+
+# new_line is not pinned by default (LF and CRLF files both read); it can be given explicitly.
+query TIR rowsort
+SELECT NAME, AGE, SCORE FROM read_mpfile('test/data/lf.rpt', new_line='\n');
+----
+Alice	30	98.5
+Bob	25	72.0
+
+# A new_line that does not match the file is an error.
+statement error
+SELECT * FROM read_mpfile('test/data/lf.rpt', new_line='\r\n');
+----
+
+# new_line is validated by read_csv.
+statement error
+SELECT * FROM read_mpfile('test/data/crlf.rpt', new_line='x');
+----
+This is not accepted as a newline
+
+# NULL leaves the default in place.
+query TI rowsort
+SELECT NAME, AGE FROM read_mpfile('test/data/crlf.rpt', quote=NULL, new_line=NULL);
+----
+Alice	30
+Bob	25

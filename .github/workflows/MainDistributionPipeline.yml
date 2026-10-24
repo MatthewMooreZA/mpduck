@@ -14,17 +14,26 @@ concurrency:
 jobs:
   duckdb-stable-build:
     name: Build extension binaries
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.1
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
     with:
-      duckdb_version: v1.5.2
-      ci_tools_version: v1.5.1
+      duckdb_version: v2.0.0
+      ci_tools_version: v2.0-cyanoptera
+      extension_name: mpduck
+
+  # The same source tree still supports DuckDB 1.5.x (see docs/UPDATING.md).
+  duckdb-1-5-build:
+    name: Build extension binaries (DuckDB 1.5.x)
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.6
+    with:
+      duckdb_version: v1.5.6
+      ci_tools_version: v1.5.6
       extension_name: mpduck
 
   code-quality-check:
     name: Code Quality Check
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.5.1
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v2.0-cyanoptera
     with:
-      duckdb_version: v1.5.2
-      ci_tools_version: v1.5.1
+      duckdb_version: v2.0.0
+      ci_tools_version: v2.0-cyanoptera
       extension_name: mpduck
       format_checks: 'format;tidy'

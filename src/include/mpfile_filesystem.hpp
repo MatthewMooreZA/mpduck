@@ -13,8 +13,14 @@ struct MPFileSchema {
 };
 
 //! Parse the header ('!') and schema ('VARIABLE_TYPES') rows from an mpfile.
-//! Reads only until the first data ('*') row, 'VARIABLE_TYPES' row, or unrecognised line.
+//! Reads only until the first data ('*') row.
+//! Throws if the file cannot be opened. A file that opens but has no header row yields an empty schema
+//! (column_names.size() < 2), which callers treat as "no data".
 MPFileSchema ParseMPFileSchema(const string &path, FileSystem &fs);
+
+//! True if the file at `path` is exactly zero bytes. Costs one open and size lookup, and does not read any content.
+//! Throws if the file cannot be opened.
+bool IsZeroByteMPFile(const string &path, FileSystem &fs);
 
 //! Merge a collection of schemas into one, widening types where they differ.
 //! Numeric widening order: SMALLINT < INTEGER < DOUBLE. Any non-numeric mismatch
@@ -74,6 +80,11 @@ public:
 
 	vector<OpenFileInfo> Glob(const string &path, FileOpener *opener = nullptr) override;
 	bool FileExists(const string &filename, optional_ptr<FileOpener> opener = nullptr) override;
+
+	// DuckDB v2.0 probes the COPY target path with DirectoryExists and may RemoveFile it when overwriting.
+	// Both are claimed by MPFileSystem (it owns .rpt/.prn/.fac paths), so forward them to the real filesystem.
+	bool DirectoryExists(const string &directory, optional_ptr<FileOpener> opener = nullptr) override;
+	void RemoveFile(const string &filename, optional_ptr<FileOpener> opener = nullptr) override;
 };
 
 } // namespace duckdb
